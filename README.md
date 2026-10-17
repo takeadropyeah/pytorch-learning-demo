@@ -47,6 +47,8 @@ D:\pytorch-learning\
 
 **新写的代码放哪**：自己在 `practice\` 下建文件，不要改动 `examples\`。`examples\` 是基准线——代码出问题时回去跑一遍，能跑通就说明环境没问题。具体规则见 `practice\README.md`。
 
+**怎么把代码同步到 GitHub**：见 [GIT-WORKFLOW.md](GIT-WORKFLOW.md)，日常就是 `git add -A` → `git commit -m "..."` → `git push`。
+
 ## 三、在 PyCharm 里怎么起步
 
 1. **打开项目**：PyCharm → `File` → `Open` → 选 `D:\pytorch-learning`。
