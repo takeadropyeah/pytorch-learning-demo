@@ -41,6 +41,10 @@ D:\pytorch-learning\
 ├── notebooks\
 │   └── quickstart.ipynb   # Jupyter 版，边看结果边试
 ├── data\                  # 数据集缓存（MNIST 已下好）
+├── DAILY-LOG.md           # ★ 每天记 3 分钟（最新条目在最上面）
+├── LEARNING-PLAN.md       # 12 周学习计划：阶段验收、论文清单、算力路径
+├── WSL-LINUX-TRAINING.md  # Linux 练手清单：10 条练习，为进实验室做准备
+├── GIT-WORKFLOW.md        # 日常更新 GitHub 的操作手册
 ├── requirements.txt
 └── README.md
 ```
@@ -59,6 +63,8 @@ D:\pytorch-learning\
 4. **配 Jupyter**（要用 notebook 时）：打开 `notebooks\quickstart.ipynb`，右上角内核选 `Python 3 (ipykernel)`；如果列表里没有，点 `Select Interpreter` 选择同一个 `.venv` 解释器即可。
 
 ## 四、学习路线（建议按这个顺序，别跳）
+
+> **完整的分阶段计划在 [LEARNING-PLAN.md](LEARNING-PLAN.md)** —— 含 12 周时间表、每阶段验收标准、论文清单、8GB 显存技巧、进度打勾表。下面是精简版概览。
 
 **阶段 0 · 熟悉工具（1–2 天）**
 跑通 `examples\00`，学会：打断点、逐行调试、看变量面板、在 PyCharm 里开 Terminal。调试能力比背 API 重要。
