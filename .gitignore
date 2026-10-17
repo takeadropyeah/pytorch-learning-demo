@@ -1,0 +1,25 @@
+.venv/
+.venv*/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# PyCharm
+.idea/
+*.iml
+
+# 安装过程的临时目录与日志
+.tmp/
+.pip-cache/
+install.log
+
+# 数据与模型
+data/
+checkpoints/
+runs/
+*.pth
+*.pt
+*.onnx
+
+# Jupyter
+.ipynb_checkpoints/

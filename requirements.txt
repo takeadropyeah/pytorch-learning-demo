@@ -1,0 +1,12 @@
+# PyTorch 本体必须从 CUDA 源单独安装（Windows 上 PyPI 的 torch 是 CPU 版）：
+#   pip install --index-url https://download.pytorch.org/whl/cu126 torch torchvision torchaudio
+#
+# 下面这些从 PyPI 正常安装即可：pip install -r requirements.txt
+
+numpy
+pandas
+matplotlib
+tqdm
+jupyter
+ipykernel
+torchinfo
