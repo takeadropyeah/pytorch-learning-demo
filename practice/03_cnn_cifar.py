@@ -53,12 +53,17 @@ class SmallCNN(nn.Module):
         super().__init__()
         self.features=nn.Sequential(
             nn.Conv2d(3,32,3,padding=1),
+            nn.BatchNorm2d(32),             #新增
             nn.ReLU(),
             nn.MaxPool2d(2),
+
             nn.Conv2d(32,64,3,padding=1),
+            nn.BatchNorm2d(64),
             nn.ReLU(),
             nn.MaxPool2d(2),
+
             nn.Conv2d(64,128,3,padding=1),
+            nn.BatchNorm2d(128),             #新增
             nn.ReLU(),
             nn.MaxPool2d(2),
         )
@@ -116,6 +121,7 @@ def main():
     model = SmallCNN().to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG["lr"])
+    scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=CONFIG["epochs"])
 
     for epoch in range(1,CONFIG["epochs"]+1):
         t0=time.perf_counter()
@@ -137,7 +143,9 @@ def main():
 
         train_acc=evaluate(model,train_loader)
         test_acc=evaluate(model,test_loader)
-        print(f"==>epoch{epoch} train{train_acc*100:.2f}% test{test_acc*100:.2f}% "
+        scheduler.step()
+        print(f"==>epoch{epoch} lr={optimizer.param_groups[0]['lr']:.6f} "
+              f"train{train_acc*100:.2f}% test{test_acc*100:.2f}% "
               f"耗时{time.perf_counter()-t0:.1f}s",flush=True)
 
     new_file = not RESULTS.exists()

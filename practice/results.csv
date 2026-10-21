@@ -1,3 +1,5 @@
 epochs,batch,lr,workers,augment,train_acc,test_acc
 2,128,0.001,4,crop+flip,0.5269,0.5506
 40,128,0.001,4,crop+flip,0.8306,0.8076
+40,128,0.001,4,crop+flip,0.8148,0.7847
+40,128,0.001,4,crop+flip,0.8716,0.8453
