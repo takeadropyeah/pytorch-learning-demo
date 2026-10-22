@@ -17,6 +17,7 @@ CONFIG={
     "lr":1e-3,
     "epochs":40,
     "num_workers":4,
+    "weight_decay":1e-4,
     "use_bn":True,
     "use_cosine":True,
 }
@@ -57,10 +58,14 @@ def main():
                              pin_memory=(device == "cuda"))
 
     model=ResNet18().to(device)
+    print(f"optimizer=AdamW wd={CONFIG["weight_decay"]}",flush=True)
     print(f"参数量: {sum(p.numel() for p in model.parameters()):,}",flush=True)
 
     criterion=nn.CrossEntropyLoss()
-    optimizer=torch.optim.Adam(model.parameters(),lr=CONFIG["lr"])
+    # optimizer=torch.optim.Adam(model.parameters(),lr=CONFIG["lr"])
+    optimizer=torch.optim.AdamW(
+        model.parameters(),lr=CONFIG["lr"],weight_decay=CONFIG["weight_decay"]
+    )
     scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=CONFIG["epochs"])
 
     for epoch in range(1,CONFIG["epochs"]+1):
@@ -92,10 +97,10 @@ def main():
     with open(RESULTS, "a", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         if new_file:
-            w.writerow(["epochs", "batch", "lr", "workers", "augment", "bn", "cosine", "train_acc", "test_acc"])
+            w.writerow(["epochs", "batch", "lr", "workers", "augment", "bn", "cosine", "weight_decay", "model", "train_acc", "test_acc"])
         w.writerow([CONFIG["epochs"], CONFIG["batch_size"], CONFIG["lr"], CONFIG["num_workers"],
-                    "crop+flip", CONFIG["use_bn"], CONFIG["use_cosine"],
-                    f"{train_acc:.4f}", f"{test_acc:.4f}"])
+                    "crop+flip", CONFIG["use_bn"], CONFIG["use_cosine"],CONFIG["weight_decay"],
+                    "ResNet18",f"{train_acc:.4f}", f"{test_acc:.4f}"])
     print(f"结果已追加到 {RESULTS.name}")
 
 if __name__=="__main__":

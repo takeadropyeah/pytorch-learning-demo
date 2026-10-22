@@ -1,7 +1,8 @@
-epochs,batch,lr,workers,augment,train_acc,test_acc
-2,128,0.001,4,crop+flip,0.5269,0.5506
-40,128,0.001,4,crop+flip,0.8306,0.8076
-40,128,0.001,4,crop+flip,0.8148,0.7847
-40,128,0.001,4,crop+flip,0.8716,0.8453
-2,128,0.001,4,crop+flip,True,True,0.6742,0.6757
-40,128,0.001,4,crop+flip,True,True,0.9985,0.9267
+epochs,batch,lr,workers,augment,bn,cosine,weight_decay,model,train_acc,test_acc
+2,128,0.001,4,crop+flip,False,False,,SmallCNN,0.5269,0.5506
+40,128,0.001,4,crop+flip,False,False,,SmallCNN,0.8306,0.8076
+40,128,0.001,4,crop+flip,True,False,,SmallCNN,0.8148,0.7847
+40,128,0.001,4,crop+flip,True,True,,SmallCNN,0.8716,0.8453
+2,128,0.001,4,crop+flip,True,True,,ResNet18,0.6742,0.6757
+40,128,0.001,4,crop+flip,True,True,,ResNet18,0.9985,0.9267
+40,128,0.001,4,crop+flip,True,True,0.0001,ResNet18,0.9988,0.9273
