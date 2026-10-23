@@ -17,7 +17,7 @@ CONFIG={
     "lr":1e-3,
     "epochs":40,
     "num_workers":4,
-    "weight_decay":1e-4,
+    "weight_decay":1e-2,
     "use_bn":True,
     "use_cosine":True,
 }
