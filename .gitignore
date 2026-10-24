@@ -23,3 +23,6 @@ runs/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# 训练日志
+logs/
