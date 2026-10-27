@@ -32,6 +32,7 @@ def parse_args():
     p.add_argument("--no-augment",action="store_true",help="关闭数据增强")
     p.add_argument("--erase",type=float,default=0.5,help="RandomErasing的概率，0表示关闭")
     p.add_argument("--resume",action="store_true",help="从对应 tag 的 checkpoint 接着训练")
+    p.add_argument("--plain",action="store_true",help="去掉残差短接，退化成 plain-18（消融用）")
     p.add_argument("--tag",type=str,default="default",help="实验标签，决定 checkpoint 文件名")
     return p.parse_args()
 
@@ -48,6 +49,7 @@ def build_config(args):
         "erase": args.erase,
         "use_bn": True,
         "use_cosine": True,
+        "plain": args.plain,
         "resume":args.resume,
         "tag":args.tag,
     }
@@ -117,8 +119,9 @@ def main():
                              num_workers=CONFIG["num_workers"], persistent_workers=True,
                              pin_memory=(device == "cuda"))
 
-    model=ResNet18().to(device)
+    model=ResNet18(plain=CONFIG["plain"]).to(device)
     print(f"optimizer={CONFIG['optim']} wd={CONFIG['weight_decay']}",flush=True)
+    print(f"结构: {'plain-18（无残差）' if CONFIG['plain'] else 'ResNet-18（有残差）'}",flush=True)
     print(f"参数量: {sum(p.numel() for p in model.parameters()):,}",flush=True)
 
     criterion=nn.CrossEntropyLoss()
@@ -138,7 +141,7 @@ def main():
 
             # 检查 1：影响训练轨迹的超参必须一致
             keys = ("epochs", "batch_size", "lr", "weight_decay",
-                    "optim", "no_augment", "erase")
+                    "optim", "no_augment", "erase", "plain")
             bad = [f"{k}: 存档={old.get(k)!r}  当前={CONFIG.get(k)!r}"
                    for k in keys
                    if k in old and old.get(k) != CONFIG.get(k)]
@@ -204,7 +207,8 @@ def main():
             w.writerow(["epochs", "batch", "lr", "workers", "augment", "bn", "cosine", "weight_decay", "model", "train_acc", "test_acc"])
         w.writerow([CONFIG["epochs"], CONFIG["batch_size"], CONFIG["lr"], CONFIG["num_workers"],
                     aug_name(CONFIG), CONFIG["use_bn"], CONFIG["use_cosine"],CONFIG["weight_decay"],
-                    "ResNet18",f"{train_acc:.4f}", f"{test_acc:.4f}"])
+                    "Plain18" if CONFIG["plain"] else "ResNet18",
+                    f"{train_acc:.4f}", f"{test_acc:.4f}"])
     print(f"结果已追加到 {RESULTS.name}")
 
 if __name__=="__main__":

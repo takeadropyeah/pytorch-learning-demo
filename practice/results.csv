@@ -14,3 +14,5 @@ epochs,batch,lr,workers,augment,bn,cosine,weight_decay,model,train_acc,test_acc
 2,128,0.001,4,crop+flip+erase,True,True,0.0,ResNet18,0.6347,0.6679
 2,128,0.001,4,crop+flip+erase,True,True,0.0,ResNet18,0.6363,0.6640
 100,128,0.001,4,crop+flip+erase,True,True,0.0,ResNet18,0.9965,0.9417
+40,128,0.001,4,crop+flip,True,True,0.0,ResNet18,0.9988,0.9260
+40,128,0.001,4,crop+flip,True,True,0.0,Plain18,0.9891,0.9065

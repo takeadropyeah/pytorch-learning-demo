@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class BasicBlock(nn.Module):
 
-    def __init__(self, in_ch,out_ch,stride=1):
+    def __init__(self, in_ch,out_ch,stride=1,plain=False):
         super().__init__()
         self.conv1 = nn.Conv2d(in_ch, out_ch, 3,stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(out_ch)
@@ -12,7 +12,11 @@ class BasicBlock(nn.Module):
         self.bn2 = nn.BatchNorm2d(out_ch)
         self.relu = nn.ReLU(inplace=True)
 
-        if stride !=1 or in_ch !=out_ch:
+        # plain=True：去掉短接。整个网络退化成 ResNet 论文里的 plain-18，
+        # 深度、通道、BN 位置全都不变，唯一变量就是"有没有 + x"。
+        if plain:
+            self.shortcut = None
+        elif stride !=1 or in_ch !=out_ch:
             self.shortcut=nn.Sequential(
                 nn.Conv2d(in_ch,out_ch,1,stride=stride,bias=False),
                 nn.BatchNorm2d(out_ch),
@@ -23,12 +27,16 @@ class BasicBlock(nn.Module):
     def forward(self, x):
         out = self.relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
-        out = self.relu(out + self.shortcut(x))
+        if self.shortcut is None:
+            out = self.relu(out)
+        else:
+            out = self.relu(out + self.shortcut(x))
         return out
 
 class ResNet18(nn.Module):
-    def __init__(self,num_classes=10):
+    def __init__(self,num_classes=10,plain=False):
         super().__init__()
+        self.plain = plain
         self.stem=nn.Sequential(
             nn.Conv2d(3,64,3,stride=1,padding=1,bias=False),
             nn.BatchNorm2d(64),
@@ -42,9 +50,9 @@ class ResNet18(nn.Module):
         self.fc=nn.Linear(512,num_classes)
 
     def _make_layer(self,in_ch,out_ch,num_blocks,stride):
-        blocks=[BasicBlock(in_ch,out_ch,stride)]
+        blocks=[BasicBlock(in_ch,out_ch,stride,plain=self.plain)]
         for _ in range(num_blocks-1):
-            blocks.append(BasicBlock(out_ch,out_ch,1))
+            blocks.append(BasicBlock(out_ch,out_ch,1,plain=self.plain))
         return nn.Sequential(*blocks)
 
     def forward(self,x):

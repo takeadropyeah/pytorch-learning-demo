@@ -39,6 +39,29 @@
 
 # 日志正文（最新的在最上面）
 
+## 2026-10-27 · 星期一 · 残差消融（实验 #14 / #15）
+
+**做了什么**
+- 复盘 12 周路线：W1/W3–W8 已完成，W2 的 MLP 跳过，W9–W12 是项目期；决定先做机制消融再补经典架构
+- 给 `resnet_model.py` 加 `plain` 开关（`BasicBlock(plain=True)` → `shortcut=None`，前向走 `out = self.relu(out)`），`05_resnet_train.py` 加 `--plain`，checkpoint 的 resume 校验也带上 `plain` 字段
+- **实验 #14**：重跑 #9 作对照 → 92.53%（#9 是 92.47%，差 0.06，无回归）
+- **实验 #15**：`--plain` 跑 plain-18 → **90.48%**（−2.05），但 **train 也从 99.88% 掉到 98.91%**
+- 顺手写了 LeNet（学到第 6 课），参数量核对时踩到 61,706 vs 61,848 的版本差异
+
+**卡在哪**
+- 沙箱从 workspace-write 退回 read-only 后，`data\cifar-10-batches-py` 的 ACL 被改坏（继承被关、连 SYSTEM 都读不了），训练起不来。跑了 `diagnose-windows-sandbox-acl` 的修复脚本，**生成新文件的 ACE 是"仅此文件夹"**，所以重新解压出来的目录又不可读 → 最后把 data 目录整体 FullControl 授予当前用户 + SYSTEM/Administrators
+- 结论：**这个项目的训练必须在 danger-full-access 下跑**，workspace-write 读不了数据目录
+- 笔记本中途合盖，训练在 ep3 被中断；用 `--resume` 从 ep4 接着跑，学习率曲线连续
+
+**明天第一件事**
+- 补经典架构：LeNet → AlexNet → VGG（`LEARNING-PLAN.md` W5/W6 那条线），然后系统梳理全部知识点
+
+**计划对照**：消融做完了，但**只证明了"shortcut 改善可优化性"，没复现"退化"**（退化要求 plain-34 比 plain-18 差）。诚实记下来，排进待跑队列 **P4**。
+
+**提交**：待提交（`--plain` 支持 + 实验 #14/#15 + P4）
+
+---
+
 ## 2026-10-24 · 星期六 · 工程化改造 + P1 长训练
 
 **做了什么**

@@ -257,18 +257,22 @@ print(torch.cuda.max_memory_allocated() / 1024**3, "GB")
 
 ## 九、进度追踪
 
-- [ ] W1 工程化 baseline（可复现）
-- [ ] W2 MLP on MNIST >97%
-- [ ] W3 CNN on CIFAR-10 >70%
-- [ ] W4 五组对照实验 + 结论
-- [ ] W5 LeNet + AlexNet
-- [ ] W6 VGG + 参数量对比
-- [ ] W7 ResNet 手写
-- [ ] W8 残差消融实验（普通 CNN vs ResNet-18）
-- [ ] W9 三篇论文笔记
+- [x] W1 工程化 baseline（可复现）——`practice\01_baseline.py`，连跑 3 次逐位一致
+- [~] W2 MLP on MNIST >97%——**跳过**：MLP 骨架在 `examples\03` 已写过，MNIST CNN 在 `examples\04` 跑出 98.62%，能力被 W3 覆盖
+- [x] W3 CNN on CIFAR-10 >70%——**84.34%**（实验 #8，超目标 14 点）
+- [~] W4 五组对照实验 + 结论——A/B/C/E 四组做了，**D（Dropout）未单独消融**；产出记在 `practice\EXPERIMENTS.md` 对照实验专区，未另写 `04_diagnostics.md`
+- [ ] W5 LeNet + AlexNet——**未做**
+- [~] W6 VGG + 参数量对比——理论讲了（3×3 堆叠 = 72% 参数、感受野），**代码未实现**
+- [x] W7 ResNet 手写——**92.47%**（实验 #9，1117 万参数，全程自己写）
+- [ ] W8 残差消融实验（普通 CNN vs ResNet-18）——**未做，当前最大缺口**
+- [~] W9 三篇论文笔记——ResNet 精读已完成，**AlexNet / BN 未读**
 - [ ] W10 复现：跑通官方代码复现论文数字
 - [ ] W11 复现：自己重写并对比
 - [ ] W12 一页复现报告 + 提交
+
+> **走法偏离记录**：实际是 W1→W3→W4→W7 跳着走的，越过了阶段 4（经典架构手写）直接进阶段 5（ResNet）。
+> 这不是错误——CIFAR-10 这条线从 74.97% 打到了 94.13%，实验能力和工程化都远超计划预期。
+> 但 **W8 是计划里唯一标"必做"的消融**，它验证的是 ResNet 存在的理由。跳过它，ResNet 就只是"抄来的结构"。
 
 ---
 
