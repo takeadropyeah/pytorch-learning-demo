@@ -38,16 +38,41 @@ D:\pytorch-learning\
 │   ├── 03_linear_regression.py  # 完整训练循环的骨架
 │   └── 04_mnist_cnn.py    # 第一个真正的卷积网络
 ├── practice\              # ★ 你自己写的练习代码放这里（见 practice\README.md）
+│   ├── 01_baseline.py     # 可复现的基线（配置抽离 + 固定 seed）
+│   ├── 03_cnn_cifar.py    # SmallCNN on CIFAR-10
+│   ├── 04_resnet.py       # ResNet 手写
+│   ├── 05_resnet_train.py # 工程化训练脚本（argparse / checkpoint / --tag / 日志）
+│   ├── 06_lenet.py        # LeNet-5 on MNIST
+│   ├── 07_attention.py    # 单头自注意力（对齐 nn.MultiheadAttention）
+│   ├── 08_mha.py          # 多头自注意力
+│   ├── 09_transformer_block.py  # 完整 Pre-LN Transformer Block
+│   ├── 10_pos_and_mask.py # 位置编码 + 因果掩码
+│   ├── 11_mini_gpt.py     # ★ 手写 mini GPT，训完能生成莎士比亚风格文本
+│   ├── resnet_model.py    # ResNet-18/34（含 --plain 消融开关）
+│   ├── augment_mix.py     # CutMix / MixUp
+│   ├── tools\             # 自建工具：参数量/MACs/延迟、config 对比、RNG 演示、验证脚本
+│   ├── EXPERIMENTS.md     # ★ 每次训练的技术参数与结果（22 组）
+│   └── NOTES.md           # ★ 11 课学习笔记
 ├── notebooks\
 │   └── quickstart.ipynb   # Jupyter 版，边看结果边试
-├── data\                  # 数据集缓存（MNIST 已下好）
+├── data\                  # 数据集缓存（MNIST 已下好；shakespeare.txt 也在）
 ├── DAILY-LOG.md           # ★ 每天记 3 分钟（最新条目在最上面）
-├── LEARNING-PLAN.md       # 12 周学习计划：阶段验收、论文清单、算力路径
+├── LEARNING-PLAN.md       # 12 周学习计划 + 6 周扩展：阶段验收、论文清单、算力路径
 ├── WSL-LINUX-TRAINING.md  # Linux 练手清单：10 条练习，为进实验室做准备
 ├── GIT-WORKFLOW.md        # 日常更新 GitHub 的操作手册
 ├── requirements.txt
 └── README.md
 ```
+
+**几个可以直接看的产物**（都在 git 里）：
+
+| 文件 | 是什么 |
+|---|---|
+| `practice\results_cost_accuracy.png` | 精度 vs 参数量曲线（四个模型） |
+| `practice\depth_ablation.png` | 复现 ResNet 论文 Figure 1：plain 退化、ResNet 不退化 |
+| `practice\cutmix_demo.png` | CutMix 的 λ 分布与挖块效果 |
+| `practice\EXPERIMENTS.md` | 22 组实验的完整台账 |
+| `practice\NOTES.md` | 11 课笔记 |
 
 **新写的代码放哪**：自己在 `practice\` 下建文件，不要改动 `examples\`。`examples\` 是基准线——代码出问题时回去跑一遍，能跑通就说明环境没问题。具体规则见 `practice\README.md`。
 

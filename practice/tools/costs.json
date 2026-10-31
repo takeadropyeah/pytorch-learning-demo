@@ -1,0 +1,32 @@
+{
+  "SmallCNN": {
+    "params": 620810,
+    "macs_g": 0.010906,
+    "infer_ms": 0.584
+  },
+  "ResNet18": {
+    "params": 11173962,
+    "macs_g": 0.556037,
+    "infer_ms": 2.484
+  },
+  "Plain18": {
+    "params": 11000138,
+    "macs_g": 0.549688,
+    "infer_ms": 2.2
+  },
+  "ResNet34": {
+    "params": 21282122,
+    "macs_g": 1.160426,
+    "infer_ms": 4.404
+  },
+  "Plain34": {
+    "params": 21108298,
+    "macs_g": 1.154078,
+    "infer_ms": 3.913
+  },
+  "LeNet5-MNIST": {
+    "params": 61848,
+    "macs_g": 0.000423,
+    "infer_ms": 0.597
+  }
+}

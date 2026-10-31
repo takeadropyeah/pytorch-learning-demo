@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-
+#深度 -> 每个阶段的block数
+ARCHS={"18":(2,2,2,2),"34":(3,4,6,3)}
 
 class BasicBlock(nn.Module):
 
@@ -33,19 +34,20 @@ class BasicBlock(nn.Module):
             out = self.relu(out + self.shortcut(x))
         return out
 
-class ResNet18(nn.Module):
-    def __init__(self,num_classes=10,plain=False):
+class ResNet(nn.Module):
+    def __init__(self,num_classes=10,plain=False,layers=(2,2,2,2)):
         super().__init__()
+        self.layers=layers
         self.plain = plain
         self.stem=nn.Sequential(
             nn.Conv2d(3,64,3,stride=1,padding=1,bias=False),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
         )
-        self.layer1=self._make_layer(64,64,2,stride=1)
-        self.layer2=self._make_layer(64,128,2,stride=2)
-        self.layer3=self._make_layer(128,256,2,stride=2)
-        self.layer4=self._make_layer(256,512,2,stride=2)
+        self.layer1=self._make_layer(64,64,layers[0],stride=1)
+        self.layer2=self._make_layer(64,128,layers[1],stride=2)
+        self.layer3=self._make_layer(128,256,layers[2],stride=2)
+        self.layer4=self._make_layer(256,512,layers[3],stride=2)
         self.pool=nn.AdaptiveAvgPool2d(1)
         self.fc=nn.Linear(512,num_classes)
 
@@ -64,4 +66,10 @@ class ResNet18(nn.Module):
         x=self.pool(x)
         x=torch.flatten(x,1)
         return self.fc(x)
+
+def build_resnet(depth="18",num_classes=10,plain=False):
+        return ResNet(num_classes,plain,ARCHS[str(depth)])
+
+def ResNet18(num_classes=10,plain=False):
+        return build_resnet("18",num_classes,plain)
 

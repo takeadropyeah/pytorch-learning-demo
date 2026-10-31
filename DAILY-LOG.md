@@ -39,6 +39,114 @@
 
 # 日志正文（最新的在最上面）
 
+## 2026-10-31 · 星期五 · W2 收口：手写 Transformer + mini GPT + 简历定稿
+
+**做了什么**
+- **简历定稿到 1 页**：项目经历 4 条 bullet 从 17 行压到 9 行（去掉嵌套 itemize，18/34 层合成一条）；`resume (2).pdf` 渲染确认 `pageCount:1`，底部余 2.4cm
+- **手写三个组件，全部与 PyTorch 官方逐位对齐**：
+  - `08_mha.py` → `nn.MultiheadAttention` 最大差 **5.96e-08**
+  - `09_transformer_block.py` → Pre-LN block 最大差 **4.77e-07**
+  - `10_pos_and_mask.py` → 位置编码 + 因果掩码（无官方对照，用性质检验）
+- **`11_mini_gpt.py` 训练跑通**（实验 #22）：3000 步 **39.1 秒**，val loss 4.21 → **1.7271**，困惑度 **60 → 5.6**
+- 写了四个验证/解剖脚本：`inspect_minigpt.py`（拆开看每个参数）、`show_full_dist.py`（65 维完整分布）、`verify_minigpt.py`（四层验证）、`show_temperature.py`（温度效果）
+
+**最重要的读数**
+- **四层基线**：均匀 4.1744 → unigram 3.3092 → bigram 2.4819 → **本模型 1.7160**。比 bigram 低 0.77，说明它用的**不只是前一个字符**，attention + 64 窗口真在起作用。哪天跑出 val≈2.5 就是退化成了 bigram
+- **因果性检验**：改最后一个字符，位置 0~4 变化 **0.000000**，位置 5 变化 1.81。这条比 loss 曲线更能证明代码对
+- **随初始化 block 近似恒等映射**：LN 后 std 1.0013、attn 输出 std 0.1713（只有 18%），相加后 0.9613 ≈ 输入 0.9601 → 这就是能堆 96 层的原因
+- **Pre-LN vs Post-LN 输出差 1.4966，比输入 std(0.9601) 还大** → 是两个完全不同的函数，不是实现细节
+
+**卡在哪**
+- `UnicodeEncodeError: 'gbk' ... '\xb2'`：打印 `12·d²` 里的 `²` 在 GBK 控制台崩。修法 `sys.stdout.reconfigure(encoding="utf-8")`，**和 `diff_config.py` 是同一个坑**
+- `Invoke-WebRequest` 下莎士比亚语料 TLS 失败，改 Python urllib + 关 SSL 验证，1 秒拿到 1.1MB
+- 我自己演示时用了 `torch.topk(logits, 3)` 只打印前三名，被用户抓住"不是应该有 65 个吗"——**他说的对，是我在取巧**
+
+**明天第一件事**
+- 读 *Attention Is All You Need* Section 3（简历上写了这篇，读完才敢投）
+
+**计划对照**：W2 超额完成（原排期只要求"手写单头 attention"，实际写完 MHA + block + 位置编码 + mini GPT）。
+
+**提交**：`08_mha.py` / `09_transformer_block.py` / `10_pos_and_mask.py` / `11_mini_gpt.py` / 四个 tools / 实验 #22 / 三份记录
+
+---
+
+## 2026-10-30 · 星期四 · Attention 第一课 + 07 单头实现
+
+**做了什么**
+- **简历二版做了四件事**：删掉跨配置的"6.79 点"（选 B）；加荣誉奖项（服务外包大赛省级三等）；论文阅读扩到 4 篇（ResNet / Attention / Bahdanau / ViT）；技能栏更新
+- 讲透了 attention 的来龙去脉：**它最初不是网络层，是 2014 年机器翻译的对齐机制**（Bahdanau）→ 2015 Luong 整理出 QKV → 2017 年才变成"全都要用 attention"
+- 写 `07_attention.py`（47 行）：单头自注意力，验收时用 `mha.out_proj.weight.copy_(torch.eye(d))` 把官方的 W_O 抵消掉，最大差 **1.19e-07**
+- 写了 `tools\demo_attention.py`：八步推导，从"手写权重"走到"除以 √d"
+
+**最重要的读数**
+- **差 72 个参数**（288 vs 216）= `8×8+8` = 一个 `Linear(8,8)` → 那就是 **W_O（输出投影）**。标准 attention 是**四个矩阵不是三个**
+- **W_O 为什么必须有**：`w@v` 的结果住在 V 的向量空间里，下一层要用的是残差流那个统一空间 → W_O 负责翻译。**和 ResNet 在 shortcut 上做 1×1 投影是同一类活**
+- √d 的必要性实测：d=512 时 q·k 的 std 是 **23.10**，不缩放最大权重到 **0.912**（softmax 快饱和），除以 √d 后回到 0.014
+
+**卡在哪**
+- 第一次写 demo 时把文案硬编码成"狗 1.010 最高"，实际是 1.000 且与猫并列 → **演示脚本里的数字必须从计算里取，不能手写**
+- 随机投影 scale 用 0.5 导致注意力近似均匀（0.2~0.36），看不出结构；扫了 0.2/0.4/0.7/1.0 才定下 0.7
+
+**明天第一件事**
+- 把 07 扩成多头（08_mha.py），验收目标：与 `nn.MultiheadAttention` 逐位一致
+
+**计划对照**：W2 正式开工，比原计划晚一天（原排 W2 手写 attention）。
+
+**提交**：`07_attention.py` + `tools\demo_attention.py` + 简历 v2 + 记录
+
+---
+
+## 2026-10-29 · 星期三 · P4 退化现象复现（ResNet-34 vs plain-34）
+
+**做了什么**
+- 给 `resnet_model.py` 加深度参数：`ARCHS = {"18": (2,2,2,2), "34": (3,4,6,3)}`，`ResNet(..., layers="18")` + `build_resnet()`；给 `05_resnet_train.py` 加 `--layers {18,34}`，存档名 / csv 模型名 / resume 校验全部带上深度
+- **实验 #20 ResNet-34**：40 轮，末 10 轮均值 **93.30%**，峰值 93.54%（出现在最后一轮），train 97.63%，63.0 s/轮，21,282,122 参数 → **比 ResNet-18 同配置还低 0.27 点**
+- **实验 #21 plain-34**：40 轮，末 10 轮均值 **83.69%**，峰值 84.28%，train 只有 **85.72%**，gap 1.68 → **比 ResNet-34 低 9.61 点**
+- **退化现象复现成功**：plain 18→34 **−6.79 点**，ResNet 18→34 **+0.77 点**，gap 从 **2.05 放大到 9.61（×4.7）**
+- 写了 `tools\plot_depth_ablation.py`，产出 `depth_ablation.png`（左：精度 vs 深度 + gap 竖线；右：四条训练曲线）
+- 开讲 W2：attention 的动机（RNN 不能并行 + 长程依赖 L 步）、本质（加权平均）、公式三个问号（为什么除 `√d_k`、为什么 `dim=-1`、`V` 干什么）
+
+**最重要的读数**
+- **plain-34 的 train 只有 85.72%，gap 1.68（比 ResNet-34 的 4.09 还小）** → 过拟合说和容量不足说被同时排除，只剩"优化失败"。这正是论文 Fig.1 的论证方式：**看训练误差，不看测试误差**
+- **首轮就分出胜负**：plain-34 test 20.60% vs ResNet-34 47.95%，差 2.3 倍，后面 39 轮差距一路扩大 → 深度的伤害从第一次反传就存在
+
+**卡在哪**
+- 我上次预测「gap 会拉到 +4 以上」，实际 **+9.61，低估 2.4 倍**。而且更早还犯过一次：拿 #14（92.60，只 crop+flip）当基线去算 ResNet-34 的增量，**基线选错**，得出 +0.9 的错误预测。**同配置才可比，这条已经犯第二次了**
+- `D:\pytorch-learning\data` 的 ACL 又坏了：`workspace-write` 下 `PermissionError: [Errno 13] data_batch_1`，必须用 `danger-full-access` 才能启动训练
+- 发现"训练多久"和"模型多大"是两个独立杠杆：40 轮预算下 34 层反而亏（参数 ×1.90、时间 ×1.83、精度 −0.27）
+
+**明天第一件事**
+- 写 `practice\07_attention.py`：单头 scaled dot-product attention，不用 `nn.MultiheadAttention`，验证 `(B,L,d)` 进出、权重每行和为 1
+
+**计划对照**：P4 完成（待跑队列清空 P1/P2/P4/P5，只剩 P3 label smoothing 未做）。W2 原排期的手写 attention 仍未动。
+
+**提交**：待提交（resnet 深度改造 + 实验 #20/#21 + 深度消融图 + 三份记录）
+
+---
+
+## 2026-10-28 · 星期二 · LeNet 收工 + A1 成本画像
+
+**做了什么**
+- 补完 LeNet 的数据管道，修掉 6 个 bug（缺 `ToTensor`、测试集缺 `Normalize`、ckpt 覆盖、csv 写盘时机、resume 死代码、无用 import），跑 15 轮 → **MNIST 99.29%**，62K 参数，4.5 s/轮。ep12 起 test 在 99.26–99.30 之间随机游走，**已饱和**
+- 补了经典架构讲解（LeNet / AlexNet / VGG），定下 **AlexNet 和 VGG 不手写、LeNet 必须写完**
+- **A1 完成**：`tools\model_stats.py`（自己实现的 hook 版 MACs 计数器）+ `tools\cost_lookup.py` + `tools\plot_cost.py`；`results.csv` 从 11 列扩到 14 列，19 行全部回填 `params / macs_g / infer_ms`
+- 产出 `results_cost_accuracy.png`：按数据集分面板的「精度-成本曲线」
+
+**卡在哪**
+- `pip install thop` 卡了 6 分钟没输出 → 干脆自己写 40 行 hook 计数器，反而把 thop 的原理看懂了
+- 脚本命名 `profile.py` **撞了标准库**，`cProfile` 内部 `import profile` 拿到我的文件，报 `AttributeError: module 'profile' has no attribute 'run'` → 改名 `model_stats.py`
+- bs=1 的延迟连跑三次是 3.73 / 3.13 / 3.14 ms，一度以为 ResNet 比 Plain 慢，**其实是噪声**。单张推理地板约 0.3–0.5 ms
+- 画出来的图上 ResNet18 是 100 轮、Plain18 是 40 轮，**那个 94.17 vs 90.65 不是结构差异**。公平对照要用实验 #14/#15 的 40 轮：+1.58% 参数换 +2.05 点
+
+**明天第一件事**
+- A2：把 `augment_mix.py` 里已经写好的 CutMix 接进 `05_resnet_train.py` 的训练循环，跑 40 轮，目标突破 94.13%
+
+**计划对照**：W1 完成（LeNet + A1）。W2 原排期含手写 attention，实际先做 CutMix。
+
+**提交**：待提交（LeNet + A1 三件套 + `results.csv` 结构变更）
+
+---
+
 ## 2026-10-27 · 星期一 · 残差消融（实验 #14 / #15）
 
 **做了什么**
