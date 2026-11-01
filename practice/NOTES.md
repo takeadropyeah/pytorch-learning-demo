@@ -15,6 +15,8 @@
 - [第 9 课 · 退化问题与深度消融（W8）](#第-9-课--退化问题与深度消融w8)
 - [第 10 课 · 注意力机制：从加权平均到 Transformer Block（W2）](#第-10-课--注意力机制从加权平均到-transformer-blockw2)
 - [第 11 课 · 手写 mini GPT（W2）](#第-11-课--手写-mini-gptw2)
+- [第 12 课 · 精读 Attention Is All You Need（W2）](#第-12-课--精读-attention-is-all-you-needw2)
+- [第 13 课 · ViT 与样本效率（W2）](#第-13-课--vit-与样本效率w2)
 - [附录 · 慢下载怎么破](#附录--慢下载怎么破)
 
 ---
@@ -1354,6 +1356,489 @@ nanoGPT（d=384, 6 层）能到 val 1.47，我们用了 1/8 算力到 1.73，在
 然后跑 `verify_minigpt.py` 的第 ② 层，会立刻显示"因果掩码有问题"。
 
 **亲手破坏一次，比读十遍解释有用。**
+
+---
+
+## 第 12 课 · 精读 Attention Is All You Need（W2）
+
+> 论文：Vaswani et al., *Attention Is All You Need*, NIPS 2017（arXiv 1706.03762）
+> 读法：Keshav 三遍读法里的**第二遍**（读论证链），不是第一遍（概览）
+> 目标：能引原话 / 找出代码与论文的差异 / 学会读结果表
+
+### 1. 三遍读法
+
+| 遍 | 时间 | 读什么 | 读完能回答 |
+|---|---|---|---|
+| 一 | 5–10 分钟 | 标题 / 摘要 / **所有图表** / 结论 | 解决什么问题、用什么办法 |
+| **二** | 1 小时 | 正文的**论证链**，跳过证明细节 | 为什么它有效 |
+| 三 | 数小时~数天 | 逐行抠、复现 | 能不能自己写出来 |
+
+零件都手写过了，所以直接做第二遍。
+
+### 2. 地图：8 页正文只有 5 处必看
+
+```
+§1 Introduction        一句话：删掉循环，只用 attention
+§2 Background          前人工作，可略读
+§3 Model Architecture  ★★★ 核心，Fig 1 + Eq 1
+§4 Why Self-Attention  ★★  Table 1，论证为什么不用 RNN/CNN
+§5 Training            ★★  配方，全是可抄的超参
+§6 Results             ★★  Table 2（战绩）+ Table 3（消融）
+§7 Conclusion + 附录
+```
+
+**必看的五样**：Figure 1、Figure 2、**Eq 1**、Table 1、Table 2/3。
+
+**全文信息量 = 一张架构图 + 两个公式 + 四张表。正文没有一行代码。**
+
+### 3. §3 五节，一节一句话
+
+| § | 原话要点 | 我的代码 |
+|---|---|---|
+| 3.1 | N=6 层，每层两个子层；输出是 `LayerNorm(x + Sublayer(x))` | `09` 的 `TransformerBlock`（N=4）|
+| 3.2 | `softmax(QKᵀ/√d_k)V`；h=8，`d_k=d_v=d/h=64` | `07` / `08` |
+| 3.3 | `max(0, xW₁+b₁)W₂+b₂`；d→2048→d；"等价于两个 1×1 卷积" | `09` 的 `FeedForward` |
+| 3.4 | 两个词嵌入 + pre-softmax 共享权重；嵌入乘 `√d_model` | `11` 绑定 ✓，**乘 √d 没做** ✗ |
+| 3.5 | 正弦位置编码；`PE_{pos+k}` 是 `PE_pos` 的线性函数 | `10`（我用了可学习版）|
+
+**3.1 那句是全篇最容易忽略的一句。** `LayerNorm(x + Sublayer(x))` = **Post-LN**（LN 在残差加法**之后**）。
+
+我写的是 Pre-LN：`x = x + self.attn(self.ln1(x))`（LN 在子层**之前**、残差**里面**）。
+
+**这不是写错**：原论文 2017 是 Post-LN，GPT-2 之后全部改 Pre-LN，因为残差通路变成纯恒等、梯度直通、不需要 warmup。`09` 里 `norm_first` 一切换，**同样权重**下输出差 **1.4966**（输入 std 只有 0.9601）——证明这是两个完全不同的函数，不是实现细节。
+
+### 4. Eq.1 逐字对照 + 脚注 1
+
+论文：`Attention(Q,K,V) = softmax(QKᵀ/√d_k)V`
+
+```python
+scores = q @ k.transpose(-2, -1) / math.sqrt(self.d)
+w = torch.softmax(scores, dim=-1)
+out = w @ v
+```
+
+**脚注 1（原话）**：假设 q、k 分量独立、均值 0、方差 1，则点积 `q·k = Σ q_i k_i` 有**均值 0、方差 d_k**。
+
+`demo_attention.py` 第 8 步实测：
+
+| d | 实测 q·k 的 std | 理论 √d |
+|---|---|---|
+| 8 | 3.36 | 2.83 |
+| 64 | 7.55 | 8.00 |
+| 512 | 23.10 | 22.63 |
+
+**这是独立复现了论文脚注，比"读懂了"硬。** 除以 √d_k 就是把这个 std 拉回 1；不缩放则 d=512 时最大权重已到 0.912，softmax 饱和 → 梯度 p(1−p)≈0。
+
+论文还说 additive attention（Bahdanau）**理论复杂度相近但 dot-product 更快**，用的是 "can be implemented using highly optimized matrix multiplication code"。**它赢在能用 cuBLAS，不是赢在效果。**
+
+### 5. 多头：`W^O` 的形状是全篇最容易抄错的
+
+```
+MultiHead(Q,K,V) = Concat(head₁, …, head_h) W^O
+head_i = Attention(Q W_i^Q,  K W_i^K,  V W_i^V)
+```
+
+`W_i^Q, W_i^K ∈ R^{d_model×d_k}`，`W_i^V ∈ R^{d_model×d_v}`，**`W^O ∈ R^{h·d_v × d_model}`**。
+
+**参数量 4d² 与 h 无关。** Table 3 的 (A) 组 `params` 列**四行全空白**——那就是证据。我实测 `h=1/2/4/8/16` 全是 **1088**。
+
+论文动机原话：**"With a single attention head, averaging inhibits this."** 单头会把不同关系平均掉。
+
+`W^O` 两个作用：①多头汇总（Concat 本身零交流）②把 `w@v` 从 **V 空间**翻译回**残差流空间**（**和 ResNet shortcut 上那个 1×1 投影同类**）。
+
+### 6. 三列对照：论文 / 我的 / 今天的
+
+| 项目 | 论文 base | `11_mini_gpt.py` | GPT-2 / LLaMA |
+|---|---|---|---|
+| N | 6 | **4** | 12–96 |
+| d_model | 512 | **128** | 768–12288 |
+| h | 8 | **4** | 12–96 |
+| d_k = d/h | 64 | **32** | 64–128 |
+| d_ff | 2048（4d）| **512（4d）** ✓ | 8/3 d（SwiGLU）|
+| 归一化位置 | **Post-LN** | **Pre-LN** ✓ | Pre-LN / RMSNorm |
+| 激活 | ReLU | **GELU** ✓ | GELU / SwiGLU |
+| dropout | 0.1 | **0** | 0 |
+| 位置编码 | 正弦 | **可学习** ✓ | RoPE |
+| **嵌入缩放** | **×√d_model** | **没有** ✗ | 无 |
+| 权重绑定 | ✓ | **✓** | 小绑大不绑 |
+| β₂ | 0.98 | **0.95** | 0.95 |
+| warmup | 4000 | **100** | 几百–几千 |
+| lr 衰减 | 1/√step | **cosine→10%** | cosine / WSD |
+| label smoothing | 0.1 | **0** | 通常 0 |
+| 梯度裁剪 | 未提 | **1.0** | 1.0 |
+
+**四处不同（Pre-LN / GELU / 可学习 PE / AdamW）全是 2019 年后的标准做法，不是错误。唯一真漏的是 `√d_model`。**
+
+**换句话说：我写的不是"2017 Transformer 迷你版"，是"GPT-2 迷你版"。**
+
+### 7. 那个 √d_model 是干什么的
+
+位置编码值域 [−1, 1]，嵌入初始化 `N(0, 0.02)`，**量级差一截**，相加时位置信息被淹没。
+
+乘 √512≈22.6 后每分量 ~0.45，和 sin/cos 的 ~0.7 同量级，两路信号势均力敌。
+
+**GPT-2 不用**：它连位置编码也是学出来的，两个都是学出来的 → 尺度自适应。**我这也是可学习 PE，所以不加也对。** 但要复现原配方就得加。
+
+### 8. Table 1：三个 desiderata（先立标准，再逐条打分）
+
+| 层类型 | 每层复杂度 | 最小串行步数 | 最长路径 |
+|---|---|---|---|
+| Self-Attention | O(n²·d) | **O(1)** | **O(1)** |
+| Recurrent | O(n·d²) | O(n) | O(n) |
+| Convolutional | O(k·n·d²) | O(1) | O(log_k n) |
+| Self-Attention（受限）| O(r·n·d) | O(1) | O(n/r) |
+
+**与 ResNet 同构的一招：**
+
+| | ResNet | Transformer |
+|---|---|---|
+| 压哪个维度 | 深度（层 ↔ 层）| 序列（token ↔ token）|
+| 原本路径长度 | L−l | j−i |
+| 压缩后 | 1 | 1 |
+| 实现 | `x + F(x)` | `Σ w_ij V_j` |
+| 治什么病 | 深了训不动（退化）| 长了记不住（长程依赖）|
+| 代价 | 参数 +173,824（1.58%）| 算力 O(n·d²) → O(n²·d) |
+
+**连乘是万恶之源**：每层增益 0.9 → `0.9^100 ≈ 2.6e-5`；1.1 → `1.1^100 ≈ 13780`；只有乘 1 安全。
+
+**"天下没有免费的直接通路"**：ResNet 用参数换，Transformer 用算力换。
+
+### 9. §5 的十二个数字
+
+```
+4.5M 句对 (EN-DE)      BPE 共享词表 37000
+36M 句 (EN-FR)         32000 word-piece
+批 = 25000 源 + 25000 目标 token（按长度分桶）
+硬件 8 × P100
+base  0.4 s/step × 100K = 12 小时
+big   1.0 s/step × 300K = 3.5 天
+Adam  β₁=0.9  β₂=0.98  ε=1e-9
+warmup 4000   dropout 0.1   label smoothing 0.1
+```
+
+**lr 公式**：`d_model^(-0.5) · min(step^(-0.5), step · warmup^(-1.5))`
+
+- `step < 4000`：`min` 取第二项 → **线性升温**
+- `step > 4000`：`min` 取第一项 → **1/√step 衰减**
+
+**为什么必须 warmup**：Adam 第 1 步的更新量**恒等于 lr**——
+
+```
+m₁ = 0.1g,  v₁ = 0.001g²
+偏差修正：m̂ = g,  v̂ = g²
+更新量 = m̂/√v̂ = g/|g| = sign(g)      ← 与梯度大小无关！
+```
+
+参数随机初始化时方向是噪声，必须从 lr≈0 起步。**Pre-LN 不需要 warmup，Post-LN 需要**——这就是我用 `warmup=100` 而原文要 4000 的原因之一。
+
+### 10. Table 3 全表（自己抄一遍才算读过）
+
+| 组 | 变化 | PPL | BLEU | params |
+|---|---|---|---|---|
+| **base** | N=6, d=512, d_ff=2048, h=8, d_k=d_v=64, P_drop=0.1, ε_ls=0.1, 100K | **4.92** | **25.8** | **65M** |
+| (A) | h=1（d_k=d_v=512）| 5.29 | 24.9 | — |
+| | h=4（128）| 5.00 | 25.5 | — |
+| | **h=16（32）** | **4.91** | **25.8** | — |
+| | h=32（16）| 5.01 | 25.4 | — |
+| (B) | d_k=d_v=16 | 5.16 | 25.1 | 58M |
+| | d_k=d_v=32 | 5.01 | 25.4 | 60M |
+| (C) | N=2 | 6.11 | **23.7** | 36M |
+| | N=4 | 5.19 | 25.3 | 50M |
+| | **N=8** | 4.88 | **25.5** | 80M |
+| | d_model=256 | 5.75 | 24.5 | 28M |
+| | **d_model=1024** | 4.66 | 26.0 | 168M |
+| | d_ff=1024 | 5.12 | 25.4 | 53M |
+| | **d_ff=4096** | 4.75 | **26.2** | 90M |
+| (D) | P_drop=0.0 | 5.77 | 24.6 | — |
+| | P_drop=0.2 | 4.95 | 25.5 | — |
+| | ε_ls=0.0 | **4.67** | **25.3** | — |
+| | ε_ls=0.2 | **5.47** | **25.7** | — |
+| (E) | 可学习位置编码 | 4.92 | 25.7 | — |
+| **big** | N=6, d=1024, d_ff=4096, h=16, P_drop=**0.3**, 300K | **4.33** | **26.4** | **213M** |
+
+### 11. 从 Table 3 读出的五件事
+
+**① 空白格本身就是结论。** (A) 组 `params` 全空——多头不改变参数量（4d² 与 h 无关）。
+
+**② 加深度无效，加宽度有效。**
+
+| 改动 | 参数 | BLEU |
+|---|---|---|
+| base | 65M | 25.8 |
+| N=2 | 36M | **23.7**（崩）|
+| N=4 | 50M | 25.3 |
+| **N=8** | 80M | **25.5**（**比 6 层还低**）|
+| d_model=1024 | 168M | 26.0 |
+| **d_ff=4096** | 90M | **26.2**（全表最高）|
+
+**2017 年的 Post-LN 结构上，6 层就是甜点。** 今天动辄 100 层，靠的是 Pre-LN / RMSNorm / 残差缩放这些**后来才出现**的稳定化手段。
+
+**③ big 不是"放大"，是"换配方"。** `P_drop` 0.1→**0.3**、步数 100K→**300K**、参数 ×3.3 换 dev BLEU **+0.6**，算力 ×3。base 才是效率故事，big 是刷榜用的。
+
+**④ N=2 崩到 23.7（−2.1）。** 病因和 ResNet 的退化**相反**：ResNet 是"深了优化不动"（向上撞墙），这是"浅了表达能力不够"（向下撞地板）。
+
+**⑤ PPL 和 BLEU 的排序不一致。**
+
+| 配置 | PPL | BLEU |
+|---|---|---|
+| d_model=1024 | **4.66**（第 2 好）| 26.0（第 3）|
+| **ε_ls=0.0** | **4.67**（第 3 好）| **25.3（很低）** |
+| d_ff=4096 | 4.75 | **26.2**（第 2）|
+| **ε_ls=0.2** | **5.47（很差）** | **25.7（还不错）** |
+
+**ε_ls 从 0.1 调到 0.2：PPL 恶化 0.55，BLEU 只掉 0.1。反过来 0.1→0.0：PPL 改善 0.25，BLEU 掉 0.5。**
+
+论文原话：
+
+> This hurts perplexity, as the model learns to be more unsure, but **improves accuracy and BLEU score**.
+
+**PPL 衡量"模型对自己多自信"，BLEU 衡量"任务做得多好"，两者不等价。论文优化的是 BLEU。**
+
+**以后看任何论文报一堆指标，第一件事问：「作者优化的是哪个？」**
+
+### 12. 论文没说 / 说了但后来被推翻的四件事
+
+**① "attention 让模型可解释"**
+> individual attention heads clearly learn to perform different tasks
+
+后来被打折：Voita et al. 2019 发现大量头可以剪掉不影响性能（冗余头），Jain & Wallace 2019 更直接——**attention 权重 ≠ 解释**。今天说"attention 图就是模型在想什么"是要被追问的。
+
+**② "正弦编码 may allow extrapolation"**
+> We chose the sinusoidal version because it **may** allow the model to extrapolate
+
+**注意 `may`。** 论文自己都没证据。实际外推不好——我测的相似度**不单调**（距离 5 的 0.7361 > 距离 4 的 0.7288）就是证据之一。现在是 RoPE（让点积直接携带相对距离）和 ALiBi。
+
+**③ O(n²) 被留作 future work，成为之后十年的主战场**
+Longformer / BigBird（稀疏）、Linformer / Performer（低秩）、**FlashAttention**（数学不变，IO 优化）、**Mamba**（换掉通信层）。
+
+**④ 论文没提梯度裁剪，但所有人都加**
+transformer 的 loss 会突然尖峰（一个坏 batch 就能炸）。**这是实践知识，不在论文里。**
+
+### 13. 附录三张图怎么读
+
+三张图都取自**编码器第 5 层（共 6 层）**的 self-attention。（为什么是第 5 层论文没说，推测是最后一层已被任务适配、中间层更反映通用句法。）
+
+**读法**：横轴是 query 位置，纵轴/色块是被注意的 key 位置，每行和为 1。
+
+| 图 | 展示什么 | 论文声称 |
+|---|---|---|
+| **Fig 3** | **长距离依赖**：动词 "making" 跨越多个词去够 "more difficult" | 头能追踪"making...more difficult"这个动宾结构 |
+| **Fig 4** | **指代消解**：代词 "its" —— 一个头指向 "Law"，另一个头指向 "application" | 不同的头在处理同一个代词的不同候选 |
+| **Fig 5** | **局部/句法**：有的头只盯着相邻的下一个词 | 头部行为与句子结构相关 |
+
+**核心声称**：`individual attention heads clearly learn to perform different tasks`。
+
+**但这是定性观察，不是定量证据。** 三张图、一层、一个句子——没有统计，没有消融。**后来被剪枝实验打了折。**
+
+**面试怎么用**：别说"attention 可解释"。说"**论文用附录 Fig 3–5 声称不同头学到不同功能（长距离依赖、指代消解、局部结构），但这是定性观察；后续 Voita 2019 的剪枝实验表明大部分头是冗余的，Jain & Wallace 2019 也指出 attention 权重不等于解释。**"
+
+**一句话把论文说了什么、局限在哪、后来怎么发展全带上。**
+
+### 14. 三个自测问题
+
+1. 论文说 `LayerNorm(x + Sublayer(x))`，我的代码写的是什么？为什么？差异有多大？
+2. `W^O` 的形状是什么？为什么多头不增加参数？
+3. Table 3 里哪个配置 PPL 最好但 BLEU 不行？说明什么？
+
+（答案在 §3、§5、§11。）
+
+---
+
+## 第 13 课 · ViT 与样本效率（W2）
+
+> 论文：Dosovitskiy et al., *An Image is Worth 16×16 Words: Transformers for Image Recognition at Scale*, ICLR 2021（arXiv:2010.11929）
+> 代码：`practice\12_vit_cifar.py`　实验：#23–#26（见 `EXPERIMENTS.md`）
+
+### 1. 一句话结论
+
+**ViT 与 ResNet-18 在 CIFAR-10 上"记忆训练集"的能力完全相同（train 98.5% vs 98.5%），但泛化差 16.24 点（77.27% vs 93.51%）。**
+
+### 2. 你其实早就写过 ViT 了
+
+ViT 论文的 Eq.2 / Eq.3：
+
+```
+z'_ℓ = MSA(LN(z_{ℓ-1})) + z_{ℓ-1}
+z_ℓ  = MLP(LN(z'_ℓ))   + z'_ℓ
+```
+
+对照 `09_transformer_block.py` 的 `forward`：
+
+```python
+x = x + self.attn(self.ln1(x))
+x = x + self.ffn(self.ln2(x))
+```
+
+**逐字一致。** 论文原文 "Layernorm (LN) is applied **before** every block" —— 是 Pre-LN，不是 BERT 的 Post-LN；MLP 是 "two layers with a GELU non-linearity"，就是 `FeedForward`。
+
+> 这是读论文最爽的一次体验：**你已经知道 80% 了，论文只是换了个输入。**
+
+### 3. ViT 唯一的新东西：式 (1)
+
+```
+z₀ = [ x_class ; x_p¹E ; x_p²E ; … ; x_p^N E ] + E_pos
+E ∈ R^{(P²·C)×D},   E_pos ∈ R^{(N+1)×D}
+```
+
+三件事，全是形状操作：
+
+| 步骤 | 做什么 | 代码 |
+|---|---|---|
+| 切块 | 把 H×W×C 的图切成 N 个 P×P×C 的块 | `x.unfold(2,P,P).unfold(3,P,P)` |
+| 展平+投影 | 每个块拉平后过**一个线性层** | `nn.Linear(P*P*C, d)` |
+| 加 CLS + 位置 | 前面插一个可学习的 token，全体加位置编码 | `nn.Parameter` + 广播相加 |
+
+**注意 `E` 是 `nn.Linear`，不是卷积。** 但 `Conv2d(3, d, kernel_size=P, stride=P)` 在 kernel == stride 时每个输出位置只看一个块，**和逐块线性投影数学等价**（官方实现就用 Conv2d，快）。
+
+### 4. Token 数怎么算
+
+```
+N = (H/P) × (W/P)
+```
+
+| 输入 | P | N | +CLS | 用于 |
+|---|---|---|---|---|
+| 224×224 | 16 | 14×14=196 | **197** | ViT-B/16、ViT-L/16（论文） |
+| 224×224 | 32 | 7×7=49 | 50 | ViT-B/32 |
+| 224×224 | 14 | 16×16=256 | 257 | ViT-H/14 |
+| **32×32** | **4** | 8×8=64 | **65** | **本次实验** |
+| 32×32 | 8 | 4×4=16 | 17 | 太少，试过 |
+
+**为什么我们不用 P=16**：32×32 切成 16×16 只有 **4** 个 token，注意力矩阵是 4×4，序列建模无从谈起。**P 翻倍，token 数降到 1/4，注意力计算量降到 1/16**（O(N²)）。
+
+### 5. 和语言模型只差两行
+
+```python
+# 11_mini_gpt.py
+x = self.tok_emb(idx) + self.pos_emb(arange(T))
+
+# 12_vit_cifar.py
+x = self.patch_embed(x)                        # ← 换这里
+x = torch.cat([self.cls.expand(B,-1,-1), x], 1)  # ← 加 CLS
+x = self.drop(x + self.pos)
+
+for blk in self.blocks:
+    x = blk(x)      # ← 不传 attn_mask：图像没有"未来"
+```
+
+**`attn_mask=None` 是全篇最关键的一处调用差异。** 语言模型必须遮住未来（因果），图像没有未来——一只猫的左上角和右下角是同时存在的。
+
+### 6. 五组实验的数字
+
+| # | 配置 | 参数 | epochs | train | test | gap | 诊断 |
+|---|---|---|---|---|---|---|---|
+| — | ResNet-18（参照） | 11.17M | 40 | 98.45 | **93.51** | 4.94 | 过拟合但泛化好 |
+| 23 | ViT d192 L4 | 1.80M | 40 | 71.62 | 69.79 | **1.83** | **欠拟合** |
+| 24 | ViT d384 L6 | 10.70M | 40 | 57.86 | 57.61 | **0.25** | **欠拟合 + 不稳定** |
+| 25 | 同 #24 + warmup 5 | 10.70M | 40 | 67.23 | 65.92 | 1.31 | 欠拟合（改善 +8.31）|
+| 26 | ViT d192 L4 | 1.80M | 200 | **98.51** | **77.27** | **21.24** | **严重过拟合** |
+
+### 7. 病反过来了
+
+同一个模型、同一套数据管道，只是训练预算不同：
+
+- 40 轮：train **71.62%** —— 连训练集都没拟合上 → **欠拟合**
+- 200 轮：train **98.51%** —— 记住了 → **过拟合**，test 卡在 77.27%
+
+test 只涨了 **+7.48**，train 涨了 **+26.89**。多出来的 160 轮几乎全用来记训练集了。
+
+### 8. 决定性对比：在 train 准确率相同的点上比 test
+
+| 模型 | 参数 | train | test | gap |
+|---|---|---|---|---|
+| ResNet-18 | 11.17M | **98.45%** | **93.51%** | 4.94 |
+| ViT | **1.80M** | **98.51%** | **77.27%** | **21.24** |
+| 差值 | −83% | +0.06 | **−16.24** | **×4.3** |
+
+**"记忆训练集"打平，"用起来"差 16.24 点。**
+
+而且注意这个反差：**ViT 参数只有 ResNet 的 1/6，gap 却是它的 4.3 倍。**
+
+> 这不是"容量大所以过拟合"，而是**没有局部性先验，所以更容易记住无关细节**。
+> 卷积的"只看邻域"是一个极强的约束，它让模型**不容易**学到"这张图右下角有个奇怪纹理"这种只在训练集里成立的捷径。
+
+### 9. warmup 为什么能救回 8.31 点
+
+联系第 12 课算过的那件事：**Adam 第一步 `m̂/√v̂ = g/|g| = sign(g)`，更新量恒等于 lr，与梯度大小无关。**
+
+随机初始化时，梯度方向基本是噪声，但步子已经是满的。模型越大，这一步推得越远：
+
+| | 无 warmup（#24） | 有 warmup（#25） |
+|---|---|---|
+| ep1 train | 26.67% | **38.90%**（+12.23）|
+| 最大单轮跌幅 | **2.89** | **1.04** |
+| 累计跌幅 | **7.06** | **3.03** |
+| ep40 test | 57.61% | **65.92%**（+8.31）|
+
+**下坠的次数都是 6/39——warmup 不是让曲线变单调，而是让每次跌得浅。**
+
+warmup 之后 gap 从 0.25 涨到 1.31，**这一步 gap 变大是好事**：说明模型终于开始拟合训练集了。
+
+> 这也解释了为什么"Post-LN 必须配 warmup 而 Pre-LN 可以省"——Pre-LN 让梯度主干是恒等的，早期震荡传不深；但**参数更新方向仍然是噪声驱动的**，所以大模型还是要 warmup。
+
+### 10. 判读规则的修正（重要）
+
+之前说过"gap 大 = 过拟合"。这句话**有前提**：train 本身要够高。
+
+> **正确的判读：先看 train 的绝对值，再看 gap。**
+
+| 情况 | train | test | gap | 真相 |
+|---|---|---|---|---|
+| ResNet-18 | 98.45 | 93.51 | 4.94 | 真过拟合（会背，但泛化还行）|
+| ViT 40 轮 | 71.62 | 69.79 | **1.83** | **两条线一起低 = 欠拟合** |
+| ViT 200 轮 | 98.51 | 77.27 | **21.24** | 真过拟合（会背，但不会用）|
+
+**同一个 gap 指标，在 1.83 和 21.24 两个值上都可能是"病"，但病完全不同。**
+
+### 11. 论文说了什么 vs 我们验证了什么
+
+论文 §1 的诚实承认：
+
+> "trained on mid-sized datasets such as ImageNet ... yield **modest accuracies of a few percentage points below ResNets**"（ImageNet 1.28M 张）
+
+原因："Transformers lack ... **translation equivariance and locality**"。
+题眼：**"large scale training trumps inductive bias"**。
+
+**我们的数字比"几个点"大得多（16.24），因为数据少 25 倍**（CIFAR 5 万 vs ImageNet 128 万），而且我们**没有任何强增强**。
+
+**能说的**：
+
+> 在 CIFAR-10、同等数据管道、同等轮数下，参数匹配的 ViT 泛化能力比 ResNet-18 低 16.24 点且过拟合更严重（gap 21.24 vs 4.94），尽管两者训练集准确率相同。这与"缺少 locality / translation equivariance 等归纳偏置导致样本效率低"的论断一致。
+
+**不能说的**：
+
+> 不能说"ViT 不适合小数据"。因为 **16.24 点里有多少是"配方"、多少是"先验"，这个实验没分开**——我们完全没用论文 / DeiT 的 RandAugment、Mixup、CutMix、stochastic depth、label smoothing。
+
+### 12. DeiT 的存在就说明这一点
+
+DeiT（Touvron et al., 2021, arXiv:2012.12877）摘要原话：
+
+> "visual transformers are **pre-trained with hundreds of millions of images using an expensive infrastructure**, thereby limiting their adoption. In this work, we produce a competitive convolution-free transformer by **training on Imagenet only**. We train them on a single computer in less than 3 days. Our reference vision transformer (86M parameters) achieves **top-1 accuracy of 83.1%** ... with **no external data**."
+
+**ViT 在 ImageNet-1k 上从零开始训练是可以打赢 CNN 的，但需要一整本配方**：
+
+| 项 | ViT 原论文（JFT 预训练）| DeiT（ImageNet-1k 从头）|
+|---|---|---|
+| 轮数 | 7–14 epochs on 300M | **300 epochs** |
+| 增强 | crop | **RandAugment + Mixup + CutMix + RandomErasing** |
+| 正则 | dropout 0.1 | **+ stochastic depth、label smoothing 0.1** |
+| warmup | — | **5 epochs** |
+| 结果 | 88.55%（ViT-H/14）| **83.1%（ViT-B，单机 3 天）** |
+
+**DeiT 这篇论文的全部意义就是：naive 训练 ViT 会失败，这是配方问题。** P6（ViT + CutMix 200 轮）就是去验证我们这条差距里配方占多少。
+
+### 13. 局限
+
+- **只有 1 个 seed**
+- **#26 的前 40 轮 ≠ #23**：余弦调度 `T_max` 跟着 `epochs` 走，#26 在 ep40 时 lr 还有 0.00095，#23 已降到 0。所以"前 40 轮均值 68.46 vs 69.26"的 0.8 点差异来自 **lr 调度长度**，不是模型
+- **没做数据量梯度**（CIFAR-10 → CIFAR-100 → ImageNet 子集），而论文最核心的证据正是那条曲线
+- **没做种子复现**，16.24 点远大于噪声底（0.06），结论稳，但 warmup 的 +8.31 只跑了一次
+
+### 14. 三个自测问题
+
+1. 为什么 ViT 的 `attn_mask` 是 `None`，而 GPT 必须传因果掩码？如果 ViT 也加因果掩码，CIFAR 上会发生什么？
+2. #26 的 train 98.51 / test 77.27，gap 21.24。#23 的 gap 只有 1.83。**哪个模型"更好"？为什么不能只看 gap？**
+3. 如果要证明"16.24 点主要来自缺归纳偏置而不是缺正则化"，下一步应该跑什么实验？需要控制哪些变量？
 
 ---
 

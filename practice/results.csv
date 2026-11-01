@@ -1,4 +1,4 @@
-epochs,batch,lr,workers,augment,bn,cosine,weight_decay,model,train_acc,test_acc,params,macs_g,infer_ms
+﻿epochs,batch,lr,workers,augment,bn,cosine,weight_decay,model,train_acc,test_acc,params,macs_g,infer_ms
 2,128,0.001,4,crop+flip,False,False,,SmallCNN,0.5269,0.5506,620810,0.010906,0.584
 40,128,0.001,4,crop+flip,False,False,,SmallCNN,0.8306,0.8076,620810,0.010906,0.584
 40,128,0.001,4,crop+flip,True,False,,SmallCNN,0.8148,0.7847,620810,0.010906,0.584
@@ -23,3 +23,7 @@ epochs,batch,lr,workers,augment,bn,cosine,weight_decay,model,train_acc,test_acc,
 100,128,0.001,4,"crop+flip+erase+norm+cutmix(a=1,p=0.5)",True,True,0.0,ResNet18,0.9959,0.9513,11173962,0.556037,2.484
 40,128,0.001,4,"crop+flip+erase+norm+cutmix(a=1,p=0.5)",True,True,0.0,ResNet34,0.9763,0.9354,21282122,1.160426,4.404
 40,128,0.001,4,"crop+flip+erase+norm+cutmix(a=1,p=0.5)",True,True,0.0,Plain34,0.8572,0.8404,21108298,1.154078,3.913
+40,128,0.001,4,cifar-tf,False,True,0.05,ViT-P4-d192-L4,0.7162,0.6979,,,
+40,128,0.001,4,cifar-tf,False,True,0.05,ViT-P4-d384-L6,0.5786,0.5761,,,
+40,128,0.001,4,cifar-tf,False,True,0.05,ViT-P4-d384-L6-w5,0.6723,0.6592,,,
+200,128,0.001,4,cifar-tf,False,True,0.05,ViT-P4-d192-L4,0.9851,0.7727,,,
