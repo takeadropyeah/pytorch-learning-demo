@@ -54,6 +54,10 @@ _blk09 = _load_py_module("blk09", "09_transformer_block.py")
 _t05 = _load_py_module("train05", "05_resnet_train.py")
 TransformerBlock = _blk09.TransformerBlock
 
+# 混合增强（CutMix/MixUp）不在 transform 里，因为一次要同时改两张图的像素和标签，
+# 而 transforms 一次只处理一张图。所以放在训练的 batch 循环里。
+from augment_mix import apply_mix, mix_criterion  # noqa: E402  (需在同目录下运行)
+
 
 # ---------------------------------------------------------------- 模型
 class PatchEmbed(nn.Module):
@@ -144,6 +148,12 @@ def parse_args():
     p.add_argument("--no-augment", action="store_true")
     p.add_argument("--erase", type=float, default=0.5)
     p.add_argument("--no-normalize", action="store_true")
+    p.add_argument("--mix", choices=["none", "cutmix", "mixup"], default="none",
+                   help="batch 级混合增强；none 时行为与 #23-#26 完全一致")
+    p.add_argument("--mix-alpha", type=float, default=1.0,
+                   help="Beta(alpha,alpha) 参数；alpha 越小挖块大小越极端")
+    p.add_argument("--mix-prob", type=float, default=0.5,
+                   help="每个 batch 施加混合的概率（论文全混=1.0，DeiT 用 1.0）")
     p.add_argument("--resume", action="store_true")
     p.add_argument("--tag", type=str, default="default")
     return p.parse_args()
@@ -156,8 +166,21 @@ def build_config(a):
         "no_augment": a.no_augment, "normalize": not a.no_normalize, "erase": a.erase,
         "patch": a.patch, "d": a.d, "layers": a.layers, "heads": a.heads,
         "mult": a.mult, "dropout": a.dropout, "warmup": a.warmup,
+        "mix": a.mix, "mix_alpha": a.mix_alpha, "mix_prob": a.mix_prob,
         "resume": a.resume, "tag": a.tag,
     }
+
+
+def aug_label(cfg):
+    """写进 results.csv 的 augment 列。
+
+    混合增强不进 transforms，所以必须单独记在这里，否则 #26（无）和 #27（有）
+    在台账里 augment 列会一模一样。
+    """
+    s = "cifar-tf"
+    if cfg.get("mix", "none") != "none":
+        s += f"+{cfg['mix']}(a={cfg['mix_alpha']:g},p={cfg.get('mix_prob', 0.5):g})"
+    return s
 
 
 def model_name(cfg):
@@ -203,6 +226,7 @@ def main():
                 heads=CONFIG["heads"], mult=CONFIG["mult"], dropout=CONFIG["dropout"]).to(device)
     n_par = sum(p.numel() for p in model.parameters())
     print(f"模型: {model_name(CONFIG)}", flush=True)
+    print(f"增强: {aug_label(CONFIG)}", flush=True)
     print(f"token 数: {model.n_tokens + 1}（{model.n_tokens} patch + 1 CLS）", flush=True)
     print(f"参数量: {n_par:,}   （ResNet-18 是 11,173,962）", flush=True)
 
@@ -234,7 +258,7 @@ def main():
         old = ck.get("config", {})
         keys = ("epochs", "batch_size", "lr", "weight_decay", "optim", "no_augment",
                 "normalize", "erase", "patch", "d", "layers", "heads", "mult", "dropout",
-                "warmup")
+                "warmup", "mix", "mix_alpha", "mix_prob")
         bad = [f"{k}: 存档={old.get(k)!r} 当前={CONFIG.get(k)!r}"
                for k in keys if k in old and old.get(k) != CONFIG.get(k)]
         if bad:
@@ -260,7 +284,12 @@ def main():
         for i, (xb, yb) in enumerate(train_loader):
             xb = xb.to(device, non_blocking=True)
             yb = yb.to(device, non_blocking=True)
-            loss = criterion(model(xb), yb)
+            # 混合增强：mode='none' 时原样返回，走同一条 loss，行为与 #23-#26 一致
+            if CONFIG["mix"] != "none" and torch.rand(1).item() < CONFIG["mix_prob"]:
+                xb, ya, yb2, lam = apply_mix(CONFIG["mix"], xb, yb, CONFIG["mix_alpha"])
+                loss = mix_criterion(model(xb), ya, yb2, lam)
+            else:
+                loss = criterion(model(xb), yb)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -291,7 +320,7 @@ def main():
             w.writerow(["epochs", "batch", "lr", "workers", "augment", "bn", "cosine",
                         "weight_decay", "model", "train_acc", "test_acc"] + COST_COLS)
         w.writerow([CONFIG["epochs"], CONFIG["batch_size"], CONFIG["lr"], CONFIG["num_workers"],
-                    "cifar-tf", False, True, CONFIG["weight_decay"], name,
+                    aug_label(CONFIG), False, True, CONFIG["weight_decay"], name,
                     f"{train_acc:.4f}", f"{test_acc:.4f}"] + cost_columns(name))
     print(f"\n结果已追加到 {RESULTS.name}（{name}）", flush=True)
     print(f"对照：ResNet-18 参数量 {11173962:,}，同管道 40 轮末轮 93.51%", flush=True)
