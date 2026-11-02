@@ -8,6 +8,19 @@
 - 对比实验要连着编号，方便回头看
 - **等价性验证（重构、换写法但结果不该变）也要记**，它证明你的改动没引入回归
 
+**`augment` 列的取值说明**（`results.csv` 用，避免看不出来是什么）：
+
+| 写法 | 实际管线 | 出处 |
+|---|---|---|
+| `norm` | 只有 ToTensor + Normalize | LeNet（MNIST）|
+| `crop+flip` | RandomCrop(32,pad=4) + HFlip | 早期 CIFAR 实验 |
+| `crop+flip+erase` | 上面 + RandomErasing | #12 |
+| `crop+flip+erase+norm` | 上面 + CIFAR 归一化 | #17 |
+| `cifar-tf` | = `crop+flip+erase+norm` 的简写 | #23–#26（ViT）|
+| `cifar-tf+cutmix(a=1,p=0.5)` | 上面 + CutMix | #18–#21、#27 |
+
+`cifar-tf` 是 `12_vit_cifar.py` 的 `aug_label()` 生成的简写，含义与 `crop+flip+erase+norm` 完全相同。
+
 ---
 
 ## 基线指纹（先看这个）
@@ -223,6 +236,25 @@ python .\05_resnet_train.py --epochs 100 --tag p1_100ep 2>&1 |
 | 首轮 test | 40.11%* | 20.60% | — | 47.95% |
 
 > *plain-18 的首轮数取自前 10 轮均值参考，直接读日志口径见 `logs\ablation_plain18.log`。
+
+**首轮读数的 seed 加固（10-29 补做，数据在 `results_seedcheck.csv`）**
+
+原来只有默认 seed 一个数，无法排除"plain-34 只是初始化运气差"。补跑 3 个显式 seed（配置与 #20/#21 逐项一致：`--epochs 1 --layers 34 --mix cutmix --mix-alpha 1.0 --mix-prob 0.5`，Adam / wd=0 / 同增强管线），每组 1 轮：
+
+| seed | plain-34 train / test | ResNet-34 train / test |
+|---|---|---|
+| 默认 | 19.89 / **20.60** | 45.30 / **47.95** |
+| 1 | 24.95 / 25.98 | 42.29 / 43.86 |
+| 2 | 22.56 / 22.14 | 46.38 / 47.19 |
+| 3 | 23.89 / 24.87 | 42.25 / 43.96 |
+| **均值 ± std（test）** | **23.40 ± 2.47** | **45.74 ± 2.14** |
+
+- 首轮 test 的 seed 噪声 **±2.5 点**，不是 ±13 点 → **初始化运气解释不了 27 点差距**。
+- 两组区间 **[20.60, 25.98] vs [43.86, 47.95] 完全不重叠**；最不利配对（plain 最高 25.98 vs ResNet 最低 43.86）仍差 **17.88 点**；train 口径最不利配对差 **17.30 点**（plain 最高 24.95 vs ResNet 最低 42.25）。
+- **原来写的 27.35 是「plain 最差 + ResNet 最好」的默认 seed 组合，属上界；诚实下界是 17.9 点。** 结论不变，口径改区间。
+- 顺带证实：早先误跑的一批**不带 cutmix** 的 seed 检查（`seedchk_*`）给出 27.67 / 21.99，落在这个区间内，说明 cutmix 对首轮的量级影响不大。
+
+> ⚠️ **执行记录**：第一次跑这批检查时忘了加 `--mix cutmix`，配置与 #20/#21 不一致，中途 kill 重跑。教训：`05_resnet_train.py` 的 `model` 列不含 tag、也不含 mix，**两批 1 轮实验在 CSV 里看起来完全一样**——靠 `augment` 列才分得出来。
 
 **三个读数：**
 

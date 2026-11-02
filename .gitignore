@@ -33,3 +33,14 @@ resume/
 
 # Office 渲染 / 临时目录
 .dsh-office-*/
+
+# ---- 私人材料：不进公开仓库 ----
+# 简历与投递相关（含手机号、姓名、目标导师与投递记录）
+resume/
+emails-draft.md
+internship-targets.md
+plan-3months-remote.md
+潘豪-*.pdf
+
+# 说明：research-brief.md 是公开的（简历与邮件中都指向它），保留在仓库里。
+# 但它的 PDF 导出件（潘豪-研究简报.pdf）不上传，避免二进制文件堆积。

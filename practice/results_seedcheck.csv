@@ -1,0 +1,9 @@
+﻿epochs,batch,lr,workers,augment,bn,cosine,weight_decay,model,train_acc,test_acc,params,macs_g,infer_ms
+1,128,0.001,4,crop+flip+erase+norm,True,True,0.0,Plain34,0.2551,0.2767,21108298,1.154078,3.913
+1,128,0.001,4,crop+flip+erase+norm,True,True,0.0,Plain34,0.2032,0.2199,21108298,1.154078,3.913
+1,128,0.001,4,crop+flip+erase+norm+cutmix(a=1,p=0.5),True,True,0.0,Plain34,0.2495,0.2598,21108298,1.154078,3.913
+1,128,0.001,4,crop+flip+erase+norm+cutmix(a=1,p=0.5),True,True,0.0,Plain34,0.2256,0.2214,21108298,1.154078,3.913
+1,128,0.001,4,crop+flip+erase+norm+cutmix(a=1,p=0.5),True,True,0.0,Plain34,0.2389,0.2487,21108298,1.154078,3.913
+1,128,0.001,4,crop+flip+erase+norm+cutmix(a=1,p=0.5),True,True,0.0,ResNet34,0.4229,0.4386,21282122,1.160426,4.404
+1,128,0.001,4,crop+flip+erase+norm+cutmix(a=1,p=0.5),True,True,0.0,ResNet34,0.4638,0.4719,21282122,1.160426,4.404
+1,128,0.001,4,crop+flip+erase+norm+cutmix(a=1,p=0.5),True,True,0.0,ResNet34,0.4225,0.4396,21282122,1.160426,4.404
