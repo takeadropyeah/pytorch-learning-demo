@@ -1,20 +1,24 @@
 # 深度学习复现与消融研究
 
-在单卡消费级 GPU（RTX 4060 Laptop，8 GB）上，从零手写模型并做**受控消融**。
+在单卡消费级 GPU（RTX 4060 Laptop，8 GB）上，**从零手写模型**并做**受控消融**；再把同一套方法论搬到**别人训好的模型**上，做参数高效微调。
 
-核心工作是在 CIFAR-10 上复现 ResNet 论文（He et al., CVPR 2016）的**退化现象**，并用三条互相独立的读数把它与「过拟合」区分开——论文给出了结论，但把判定过程留给了读者。
+三条主线，全部附可复现命令与实验台账：
 
-- 研究简报（一页纸）：[`research-brief.md`](research-brief.md)
-- 实验台账：[`practice/EXPERIMENTS.md`](practice/EXPERIMENTS.md) · [`practice/results.csv`](practice/results.csv)
-- 中文笔记：[`practice/NOTES.md`](practice/NOTES.md)
+1. **消融研究** —— 在 CIFAR-10 上复现 ResNet 论文（He et al., CVPR 2016）的**退化现象**，用三条互相独立的读数把它与「过拟合」区分开
+2. **手写 Transformer 全栈** —— 单头 / 多头注意力、Pre-LN Block、位置编码、因果掩码，与 PyTorch 官方实现**逐位对齐**，并跑通 char-level mini GPT 与 ViT
+3. **预训练模型微调与 LoRA** —— 在 Flowers102 上做**线性探针 / 全量微调 / 手写 LoRA** 三档对照，量化「省多少参数、付多少精度」
+
+- 研究简报：[`research-brief.md`](research-brief.md)
+- 实验台账：[`practice/EXPERIMENTS.md`](practice/EXPERIMENTS.md) · [`practice/results.csv`](practice/results.csv) · [`practice/results_flowers.csv`](practice/results_flowers.csv)
+- 中文笔记（15 课）：[`practice/NOTES.md`](practice/NOTES.md)
 
 ---
 
-## 一、核心结果：退化现象可以在 8 GB 笔记本上稳定复现
+## 一、核心结果 1：退化现象可以在 8 GB 笔记本上稳定复现
 
 四个配置严格同构，唯一变量是**有没有残差连接**——同一个 `BasicBlock` 里一个 `plain` 开关控制：`plain=True` 时 `self.shortcut = None`，`forward` 直接返回 `self.relu(out)`。因此同深度两组的层数、通道、kernel 大小、BN 位置逐层一致。
 
-40 轮，单卡 RTX 4060 Laptop 8 GB，同一份 CIFAR-10（5 万训练 / 1 万测试）、同一优化器（Adam）、同一初始学习率（1e-3）、同一余弦退火、同一 batch（128）。
+40 轮，同一份 CIFAR-10（5 万训练 / 1 万测试）、同一优化器（Adam）、同一初始学习率（1e-3）、同一余弦退火、同一 batch（128）。
 
 | 配置 | 层数 | 残差 | 参数量 | 训练集 | 测试集 | train − test |
 |---|---|---|---|---|---|---|
@@ -43,17 +47,96 @@
 
 同配置同种子跑两遍，实测差 **0.06 点**——这是本项目的噪声底，也是判断任何增益是否可信的尺子。
 
+![深度消融](practice/depth_ablation.png)
+
 ---
 
-## 二、仓库里有什么
+## 二、核心结果 2：预训练模型微调与 LoRA
 
-### 1. 受控消融
+同一个数据管道（Flowers102：训练 1,020 / 验证 1,020 / 测试 6,149，102 类）、同一个起点（ImageNet-21k + 1k 预训练的 ViT-B/16，85,877,094 参数）、同一 batch（32）。
 
-- **结构消融**：`plain` 开关，18/34 层 × 有/无残差，四组对照（见上）
-- **单变量消融链**：SmallCNN 84.53% → ResNet-18 92.53%，逐项定位 RandomErasing +0.45、CIFAR 归一化 +0.27、CutMix +0.32、延长至 100 轮 +1.50，累积到 **95.07%**
-- **一个负结果**：参数匹配的 ViT 在同一数据管道下从头训练，200 轮后训练集追平 ResNet-18（98.51% vs 98.45%）但测试集差 **16.24 点**，补 CutMix 后压缩到 **10.38 点**——指向归纳偏置差异，而非训练预算不足
+**目标不是「跑通 LoRA」，而是回答：省下来的参数，究竟要付多少精度？**
 
-![深度消融](practice/depth_ablation.png)
+| 模式 | lr | 轮 | 可训练 | 占比 | train | val | **test** | 显存 |
+|---|---|---|---|---|---|---|---|---|
+| scratch（从头训） | 1e-4 | 5 | 85.9M | 100% | 33.43% | 25.78% | 21.13% | 5.10 GB |
+| head_only（线性探针） | 1e-3 | 15 | 78K | 0.09% | 99.61% | 85.78% | 84.11% | **0.59 GB** |
+| full_ft | **1e-3** | 5 | 85.9M | 100% | 96.57% | 84.41% | **79.74%** | 5.10 GB |
+| full_ft | 1e-4 | 5 | 85.9M | 100% | 100.00% | 94.80% | 91.80% | 5.10 GB |
+| LoRA r=4 | 1e-3 | 5 | 447K | 0.52% | 99.80% | 91.76% | 89.02% | 3.69 GB |
+| LoRA r=8 | 1e-3 | 5 | 816K | 0.94% | 99.71% | 91.86% | 89.85% | 3.70 GB |
+| LoRA r=16 | 1e-3 | 5 | 1.55M | 1.78% | 99.80% | 92.16% | 89.54% | 3.71 GB |
+| LoRA r=8 | 1e-3 | **15** | 816K | 0.94% | 100.00% | 94.31% | **92.57%** | 3.70 GB |
+| **full_ft** | 1e-4 | **15** | 85.9M | 100% | 100.00% | **95.59%** | **94.26%** | 5.10 GB |
+
+### 三条结论
+
+**① LoRA 用 0.94% 的参数，差 1.69 点——而且这个差距不会消失**
+
+```
+5 轮：  full_ft 91.80  vs  LoRA 89.85  →  差 1.95 点
+15 轮： full_ft 94.26  vs  LoRA 92.57  →  差 1.69 点
+
+两个模型从 5→15 轮各涨：full_ft +2.46 点，LoRA +2.72 点
+```
+
+**涨幅几乎一样，所以差距几乎不变。** 这说明 LoRA 差的这 1.69 点是**低秩约束的容量代价**，不是训练不足。
+
+这条判据和上面 plain-34 那个「训练集只有 85.72% → 优化失败而非过拟合」是**同一套方法**：不看到顶就断言差距来源，等于没测。
+
+**② lr 是这张表里最大的单个因素，比 LoRA 与全量微调的差异大 7 倍**
+
+| 同一个全量微调，只改 lr | 5 轮 test |
+|---|---|
+| lr = 1e-4 | **91.80%** |
+| lr = 1e-3 | **79.74%** |
+| 差 | **−12.06 点** |
+
+`full_ft_lr1e3` 的第 2 轮 val 还从 57.94% 倒退到 50.39%——lr 过大时 Adam 前几步冲过头的典型特征（第一步 `m̂/√v̂ = sign(g)`，更新量恒等于 lr）。
+
+而 LoRA 在**同一个 lr=1e-3** 下 5 轮 89.85%（单调上升、一次没倒退）、15 轮 92.57%。**它鲁棒的原因不是「参数少」，是「只动那 8 维方向」——某个参数冲过头，破坏的只是一个低秩子空间，而不是整个预训练表示。**
+
+**③ r 不是瓶颈，轮数才是**
+
+r 从 4 到 16 参数翻 4 倍，test 只动 **0.83 点**（测试集 6,149 张 → 1 张 = 0.016 点，0.83 点 = **51 张图**），且 val/test 排序不一致；而同一配置从 5 轮→15 轮涨 **2.72 点（170 张图）**。信号在轮数上。
+
+### 显存账：LoRA 省的到底是什么
+
+| | 权重 | 梯度 | AdamW m+v | 激活值 | 实测峰值 |
+|---|---|---|---|---|---|
+| head_only | 343 MB | 0 | 0 | **0** | **0.59 GB** |
+| LoRA r=8 | 343 MB | ~3 MB | ~7 MB | 全存 | **3.70 GB** |
+| full_ft | 343 MB | 343 MB | 687 MB | 全存 | **5.10 GB** |
+
+`head_only` 只要 0.59 GB，是因为**输入与 85.9M 参数全部 `requires_grad=False` → PyTorch 根本不构建计算图、不存激活**。
+
+LoRA 的 `lora_A/lora_B` 分散在 12 个 block 里 → 梯度要穿过整个 backbone → **激活值得全存**。所以 LoRA 与 full_ft 差的只有梯度和优化器状态那 1.03 GB。
+
+> **只上 LoRA 省的是 27%，不是 90%。** 想真省显存得配梯度检查点或冻结更多层。
+
+### 顺带做的一件事：手写实现 vs `peft`
+
+`practice/lora.py` 是自己写的 309 行（`LoRALinear` + `merge/unmerge`），**5 个测试全部通过**：
+
+| 测试 | 断言 | 实测 |
+|---|---|---|
+| 恒等性 | `B=0` 时输出与 base 完全相同 | **0.000e+00** |
+| 对称性破缺 | 第 1 步 `∂A=0`、`∂B≠0`；第 2 步 `∂A≠0` | 0 / 2.906e-01；1.474e-02 |
+| 双零死锁 | `A=B=0` 时两个梯度都为 0 | 0, 0 |
+| merge 等价 | `merge()` 前后输出一致 | 2.384e-07 |
+| 注入规模 | 注入后新增参数 = 手算值 | 110,592（5.78%） |
+
+写一遍不是为了省那 340 行代码，是为了**用两条独立路径验证同一个实现**，并且真正搞懂 `target_modules` 为什么是个坑。
+
+---
+
+## 三、另外两组工作
+
+### 1. 单变量消融链
+
+SmallCNN 84.53% → ResNet-18 92.53%，逐项定位 RandomErasing **+0.45**、CIFAR 归一化 **+0.27**、CutMix **+0.32**、延长至 100 轮 **+1.50**，累积到 **95.07%**（末 10 轮均值）。
+
+这条链的要求是**必须能加得起来**：`92.53 + 0.45 + 0.27 + 0.32 + 1.50 = 95.07`。中途曾经因为把 RandomErasing 的增益算给归一化而加不起来——为此写了 `tools/diff_config.py`，事后比对 checkpoint 的完整 config。
 
 ### 2. 手写 Transformer 全栈
 
@@ -69,25 +152,31 @@
 
 `12_vit_cifar.py` 直接复用 `09` 的 Block，一行未改——Transformer Block 与模态无关。
 
-### 3. 自建评测工具
-
-| 工具 | 作用 |
-|---|---|
-| `tools/model_stats.py` | 不依赖第三方库，用前向 hook 统计参数量 / MACs / CPU 推理延迟 |
-| `tools/diff_config.py` | 对比两个 checkpoint 的完整 config，自动标出「实验变量」与「版本差异」，防止把两次不同条件的实验当成单变量对照 |
-| `tools/plot_depth_ablation.py` | 复现论文 Figure 1 的深度消融图 |
-| `tools/demo_*.py` | RNG / seed 隔离演示、注意力权重可视化、CutMix λ 分布 |
-| `tools/verify_*.py` | mini GPT 的四层基线校验（均匀 / unigram / bigram / 本模型）|
-
-`diff_config.py` 是这套流程里最实用的一件：每次训练把完整配置存进 checkpoint，对比时逐项 diff。
+**一组负结果**：参数匹配的 ViT 在同一数据管道下从头训练，200 轮后训练集追平 ResNet-18（98.51% vs 98.45%）但测试集差 **16.24 点**，补 CutMix 后压缩到 **10.38 点**——指向归纳偏置差异，而非训练预算不足。
 
 ![精度-成本](practice/results_cost_accuracy.png)
 
 ---
 
-## 三、复现核心结果
+## 四、自建评测工具
 
-四个配置，各约 20 分钟（RTX 4060 Laptop）。
+| 工具 | 作用 |
+|---|---|
+| `tools/model_stats.py` | 不依赖第三方库，用前向 hook 统计参数量 / MACs / CPU 推理延迟 |
+| `tools/diff_config.py` | 对比两个 checkpoint 的完整 config，自动标出「实验变量」与「版本差异」，防止把两次不同条件的实验当成单变量对照 |
+| `tools/fetch_weights.py` | 预训练权重断点续传：先落 `.part`、sha256 校验通过才 rename（torch 自带的会在校验失败时**把文件直接删掉**） |
+| `tools/plot_depth_ablation.py` | 复现论文 Figure 1 的深度消融图 |
+| `tools/demo_lowrank.py` | 低秩分解演示：为什么「训练好的 W 几乎满秩，只有 ΔW 低秩」 |
+| `tools/demo_*.py` | RNG / seed 隔离演示、注意力权重可视化、CutMix λ 分布 |
+| `tools/verify_*.py` | mini GPT 的四层基线校验（均匀 / unigram / bigram / 本模型）|
+
+`diff_config.py` 是这套流程里最实用的一件：每次训练把完整配置存进 checkpoint，对比时逐项 diff。
+
+---
+
+## 五、复现
+
+### 退化现象（四个配置，各约 20 分钟）
 
 ```powershell
 cd practice
@@ -98,7 +187,7 @@ python .\05_resnet_train.py --epochs 40 --layers 34                --tag p4_resn
 python .\05_resnet_train.py --epochs 40 --layers 34 --plain        --tag p4_plain34
 ```
 
-ViT 对照（各约 62 分钟）：
+### ViT 对照（各约 62 分钟）
 
 ```powershell
 python .\12_vit_cifar.py --epochs 200 --d 192 --layers 4 --heads 6 --tag vit_small_200ep
@@ -106,20 +195,38 @@ python .\12_vit_cifar.py --epochs 200 --d 192 --layers 4 --heads 6 `
     --mix cutmix --mix-alpha 1.0 --mix-prob 0.5 --tag p6_vit_cutmix_200ep
 ```
 
-手写 Transformer 各组件的自检（不需要 GPU，几秒跑完）：
+### 微调与 LoRA（各约 3–8 分钟，Flowers102 只有 1,020 张训练图）
+
+```powershell
+python .\13_vit_finetune.py --epochs 15 --lr 1e-3 --tag full_ft_lr1e3_15ep
+python .\13_vit_finetune.py --epochs 15 --lr 1e-4 --tag full_ft_lr1e4_15ep
+python .\13_vit_finetune.py --epochs 15 --head-only --lr 1e-3 --tag head_only_lr1e3_15ep
+python .\14_lora_vit.py     --epochs 15 --lora-r 8 --tag lora_r8_15ep
+python .\14_lora_vit.py     --epochs 15 --lora-r 4 --tag lora_r4_15ep
+```
+
+首次运行会自动下载 Flowers102（329 MB）与 ViT-B/16 权重（330 MB）。如果下载慢，见 `NOTES.md` 附录「慢下载怎么破」。
+
+### 手写 Transformer 各组件的自检（不需要 GPU，几秒跑完）
 
 ```powershell
 python .\07_attention.py          # 与 nn.MultiheadAttention(d, 1) 逐位对齐
 python .\08_mha.py                # 多头对齐（含总参数量不变性验证）
 python .\09_transformer_block.py  # Pre-LN / Post-LN 对比
 python .\10_pos_and_mask.py       # 置换等变、位置编码、因果性
+python .\11_mini_gpt.py           # 3000 步 39 秒，val 4.21 → 1.73
 ```
 
 ---
 
-## 四、实验台账怎么读
+## 六、实验台账怎么读
 
-`practice/results.csv` 有 **29 条**记录，一行一次训练：
+| 文件 | 内容 |
+|---|---|
+| `practice/results.csv` | CIFAR-10 / MNIST 训练 29 条 |
+| `practice/results_flowers.csv` | ViT 微调与 LoRA 10 条 |
+
+一行一次训练：
 
 | 列 | 含义 |
 |---|---|
@@ -134,7 +241,7 @@ python .\10_pos_and_mask.py       # 置换等变、位置编码、因果性
 
 ---
 
-## 五、已知局限
+## 七、已知局限
 
 主动列出，因为「知道自己的实验哪里不够硬」比数字本身重要：
 
@@ -144,10 +251,13 @@ python .\10_pos_and_mask.py       # 置换等变、位置编码、因果性
 - **只跑了 40 轮**：plain-34 的训练集准确率在 40 轮时仍在缓慢上升，没有区分「优化不动」与「优化得慢」。
 - **只有 CIFAR-10**，未在 ImageNet 尺度验证。
 - **ViT 对照**同时改变了预训练数据、轮数、增强、优化器与 dropout，无法把差距单独归因于归纳偏置。
+- **LoRA 只落在 FFN 上，没碰 attention**。原因写在 `NOTES.md` 第 15 课：`torchvision` 的 `nn.MultiheadAttention` 里，`in_proj_weight` 是裸 Parameter（换不掉）、`out_proj` 被 fast path 直接读 `.weight` 绕过 `forward`。HF 与 timm 都没有这个障碍。
+- **LoRA 每种配置只有 1 个 seed**，r=4/8/16 之间的 0.83 点差异在噪声内。
+- **LoRA 只跑了 lr=1e-3**，没跑 lr=1e-4。所以「对 lr 鲁棒」只有「1e-3 下没崩」的证据。
 
 ---
 
-## 六、环境
+## 八、环境
 
 | 项 | 值 |
 |---|---|
@@ -162,15 +272,15 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-CIFAR-10 与 MNIST 首次运行时自动下载到 `data/`。
+数据集首次运行时自动下载到 `data/`；预训练权重缓存在 `.cache/torch`（通过 `TORCH_HOME` 指向仓库内，换机器不用重下）。
 
 ---
 
-## 七、目录
+## 九、目录
 
 ```
 .
-├── research-brief.md          # 一页纸研究简报
+├── research-brief.md          # 研究简报
 ├── practice/
 │   ├── 01_baseline.py         # 可复现基线（配置抽离 + 固定 seed）
 │   ├── 03_cnn_cifar.py        # SmallCNN on CIFAR-10
@@ -179,11 +289,15 @@ CIFAR-10 与 MNIST 首次运行时自动下载到 `data/`。
 │   ├── 06_lenet.py            # LeNet-5 on MNIST（99.29%）
 │   ├── 07–11_*.py             # 手写 Transformer 全栈 + mini GPT
 │   ├── 12_vit_cifar.py        # ViT on CIFAR-10（复用 09 的 Block）
+│   ├── 13_vit_finetune.py     # ViT-B/16 迁移学习：scratch / head_only / full_ft
+│   ├── 14_lora_vit.py         # 把 LoRA 注入 ViT，与全量微调对照
+│   ├── lora.py                # 手写 LoRALinear（含 merge/unmerge + 5 个测试）
 │   ├── augment_mix.py         # CutMix / MixUp（按实际挖块面积重算 λ）
 │   ├── tools/                 # 参数量/MACs/延迟、config diff、各类演示脚本
-│   ├── EXPERIMENTS.md         # 29 组实验的技术参数与结论
-│   ├── NOTES.md               # 13 课笔记（含论文精读）
-│   └── results.csv            # 实验台账
+│   ├── EXPERIMENTS.md         # 37 组实验的技术参数与结论
+│   ├── NOTES.md               # 15 课笔记（含论文精读）
+│   ├── results.csv            # CIFAR/MNIST 台账
+│   └── results_flowers.csv    # 微调与 LoRA 台账
 └── examples/                  # 从零学 PyTorch 的参考实现（00–04）
 ```
 
@@ -191,9 +305,9 @@ CIFAR-10 与 MNIST 首次运行时自动下载到 `data/`。
 
 ---
 
-## 八、作者
+## 十、作者
 
 潘豪 · 电子科技大学 软件工程（2024 级）
 181-5058-9223 · haopan1115@gmail.com
 
-课题方向：图像复原与底层视觉。目前正在读 DnCNN / DPIR 系列，计划在消费级硬件上跑通 PnP-HQS 框架并做先验替换的对照实验。
+目前在做**效率与精度之间的账**：从「18 倍参数换 9.64 点精度」的成本画像，到「0.94% 参数差 1.69 点」的 LoRA 对照。下一步是把 LoRA 落到注意力层（用自写的 `MultiHeadSelfAttention` 替换 `torch.nn.MultiheadAttention`），并接入 HuggingFace 生态用 `peft` 做一次交叉验证。同时在读图像复原方向（DnCNN / DPIR 系列）。

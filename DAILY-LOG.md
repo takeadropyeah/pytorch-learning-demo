@@ -39,6 +39,32 @@
 
 # 日志正文（最新的在最上面）
 
+## 2026-11-06 · 星期五 · W3：ViT 微调 → LoRA，结论翻了两次
+
+**做了什么**
+- 在 `13_vit_finetune.py`（`scratch` / `head_only` / `full_ft` 三模式）之外新写 **`14_lora_vit.py`（335 行）**，LoRA 注入 ViT-B/16 的 24 个 FFN Linear
+- LoRA 本体 `practice\lora.py`（309 行，`LoRALinear` + `merge/unmerge`），**5 个测试全过**
+- 跑满 10 次：scratch / head_only×2 / full_ft×3 / LoRA r=4,8,16 ×5 轮 / LoRA r=8 ×15 轮
+- 写进 `EXPERIMENTS.md`（新增「LoRA 与参数高效微调」整节 + 实验 #28–#37 + 把「崩过的实验」那张空表填了 6 行）；`NOTES.md` 第 15 课
+
+**学到的**
+- **LoRA 用 0.94% 参数差 1.69 点**（92.57 vs 94.26），显存少 27.5%。5 轮时差 1.95、15 轮时差 1.69——两个模型从 5→15 轮都涨 2.5~2.7 点，**差距不随轮数缩小 → 是容量损失，不是训练不足**（和 plain-34 那套判据同一个方法）
+- **lr 是这张表里最大的单个因素**：同一个全量微调，lr 1e-4→1e-3 **崩 12.06 点**（91.80→79.74），ep2 的 val 还倒退 7.5 点。LoRA 在同一个 lr 下单调升到 92.57
+- **r 不是瓶颈**：r 4→16 参数翻 4 倍，test 只动 0.83 点（= 51 张图），val/test 排序还不一致；同配置 5 轮→15 轮涨 2.72 点。**信号在轮数上**
+- **显存账的真相**：LoRA 省的是梯度和优化器状态（~1.03 GB），**激活值一分没省**。head_only 只要 0.59 GB 是因为 backbone 全 `requires_grad=False` → PyTorch 不建图
+- **fast path 会让包裹静默失效**：`nn.MultiheadAttention` 快路径直接读 `out_proj.weight`，不调 `forward`。加个 `.weight` 属性"修好"之后能跑、不报错，但 `lora_B` 拿不到梯度、永远停在 0
+
+**踩的坑**
+- `build_optimizer` 给了一个**空的 `param_group`** → head_only 15 轮 loss 一条直线（train 4.69→4.70），不报错
+- `sys.modules[name]` 必须在 `exec_module` **之前**登记，否则多进程 DataLoader `PicklingError`
+- 注入后的新参数在 CPU，要再 `model.to(device)`
+- flowers102 四连失败：ACL / 缺 scipy / pip 卡死 / 权重 hash 不匹配（torch 校验失败会**直接删文件**）
+
+**明天**
+- 三组 LoRA 之外的补格：把 `08_mha.py` 的 `MultiHeadSelfAttention` 装进 ViT，让 LoRA 能落在 attention 上
+- 邮件：郑侠武（厦大）、刘松桦（上交）待发；SpikeCV 待核实
+- 改简历：把 LoRA 对照那一条加进去
+
 ## 2026-11-02 · 星期日 · W3 开头：ViT 补 CutMix（实验 #27）+ 概念补课
 
 **做了什么**

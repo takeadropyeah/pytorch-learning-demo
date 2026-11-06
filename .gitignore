@@ -44,3 +44,8 @@ plan-3months-remote.md
 
 # 说明：research-brief.md 是公开的（简历与邮件中都指向它），保留在仓库里。
 # 但它的 PDF 导出件（潘豪-研究简报.pdf）不上传，避免二进制文件堆积。
+
+# ---- 预训练权重缓存 ----
+# TORCH_HOME 被 13_vit_finetune.py 指到 .cache/torch（家目录那个建不了）。
+# 权重是几百 MB 的二进制，不进仓库。
+.cache/

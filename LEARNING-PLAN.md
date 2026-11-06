@@ -402,7 +402,7 @@ print(torch.cuda.max_memory_allocated() / 1024**3, "GB")
 - [ ] S9 序列建模：手写 RNNCell/LSTM + 梯度消失实验——**降级为 2 小时纯阅读**（2026 年已被 Transformer 取代，只需懂"路径长度 L→1"这个动机）
 - [x] S10 Attention：手写 scaled dot-product——`practice\07_attention.py`（47 行）+ `08_mha.py`（多头），**与 `nn.MultiheadAttention` 逐位一致（5.96e-08）**；演示脚本 `tools\demo_attention.py`
 - [x] S11 Transformer 从零：小 GPT 能生成文本——`09_transformer_block.py`（Pre-LN block，4.77e-07）、`10_pos_and_mask.py`（正弦编码 + 因果掩码）、`11_mini_gpt.py`（**实验 #22**：3000 步 39 秒，val 4.21 → **1.7271**，困惑度 60 → 5.6，能生成莎士比亚风格文本）
-- [ ] S12 预训练 + 微调：线性探针 / 全量 / LoRA 三方法对照
+- [x] S12 预训练 + 微调：线性探针 / 全量 / LoRA 三方法对照——`practice\13_vit_finetune.py` + `14_lora_vit.py` + `lora.py`（手写 `LoRALinear`，5 个测试全过），Flowers102 上 **84.11 / 94.26 / 92.57%**（实验 #28–#37）。核心结论：**LoRA 用 0.94% 参数差 1.69 点、显存省 27.5%**；且全量微调 lr 放大 10 倍会崩 12.06 点而 LoRA 正常。
 
 > **走法偏离记录**：实际是 W1→W3→W4→W7 跳着走的，越过了阶段 4（经典架构手写）直接进阶段 5（ResNet）。
 > 这不是错误——CIFAR-10 这条线从 74.97% 打到了 95.07%，实验能力和工程化都远超计划预期。
