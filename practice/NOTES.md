@@ -19,6 +19,7 @@
 - [第 13 课 · ViT 与样本效率（W2）](#第-13-课--vit-与样本效率w2)
 - [第 14 课 · 图像复原与 DPIR：从病态问题到「去噪即先验」（W3）](#第-14-课--图像复原与-dpir从病态问题到去噪即先验w3)
 - [第 15 课 · LoRA 与参数高效微调（W3）](#第-15-课--lora-与参数高效微调w3)
+- [第 16 课 · 跨架构验证：把 GPT-2 拉进来（W3）](#第-16-课--跨架构验证把-gpt-2-拉进来w3)
 - [附录 · 慢下载怎么破](#附录--慢下载怎么破)
 
 ---
@@ -2588,3 +2589,353 @@ peft LoRA  →  如果对不上，说明有一边的理解错了
 **另一条经验**：`TUN 模式 ≠ 全网走节点`。TUN 只负责把流量截给代理软件，走直连还是走节点仍由**分流规则**决定——所以开了 TUN 也可能对某些站点走直连。
 
 **最后**：下完一定要验 MD5。断点续传、多线程拼接都可能出问题，校验和是唯一可信的证据。
+
+---
+
+## 第 16 课 · 跨架构验证：把 GPT-2 拉进来（W3）
+
+> 第 15 课的结论全部来自 ViT/图像分类。这一课把它换掉——**换架构（CNN→Transformer 语言模型）、换任务（分类→语言建模）、换代码库（`torchvision` 手写 → `transformers` 的 `Conv1D`）**，只保留「LoRA」这一个不变项。
+>
+> 目的不是再刷一个数，是回答：**上一课那几条结论，是 ViT 的偶然，还是 LoRA 的性质？**
+
+---
+
+### 1. 先解决一个"没法比"的问题：BPC
+
+mini GPT 的历史最好成绩是 `val loss = 1.7271`。GPT-2 加载后立刻能算出 `4.1355`。
+
+**这两个数不能比。** 不是"差很多"，是**量纲不同**：
+
+- mini GPT 是 **char-level**，一个 token = 一个字符 → 1.7271 nats/**字符**
+- GPT-2 是 **BPE**，平均 **3.093 个字符 = 1 个 token** → 4.1355 nats/**token**
+
+如果直接比 loss，会得出"GPT-2 比自家小模型差 2.4 倍"这种完全错误的结论。
+
+**换算：**
+
+```
+1 token = 3.093 字符
+4.1355 nats/token ÷ 3.093 字符/token = 1.337 nats/字符
+BPC = nats/字符 ÷ ln2 = 1.337 ÷ 0.6931 = 1.929
+```
+
+**`BPC`（bits per character）= 总 nats ÷ ln2 ÷ 原文字符数。** 它只认原文字符，与分词方式完全无关。
+
+> **这是 char-level 小模型和 BPE 大模型能进同一张表的唯一理由。** 一切"跨分词器比较语言模型"的场合都必须先做这一步。
+
+**顺带一个陷阱**：PPL（困惑度）也不能跨分词器比。`thou` 被切成 `th\|ou` 两个 token，意味着对同样的 4 个字符要做 2 次预测——**预测越碎，PPL 自动越好看**，而 BPC 不变。所以拿 PPL 比 GPT-2 和 mini GPT，会系统性奖励分词更碎的一方。
+
+---
+
+### 2. 台阶 0：pip 在这台机器上是坏的
+
+`pip install transformers peft` 十几分钟**零输出**，进程停在 `CloseWait`，连着清华镜像的 443 端口。
+
+排查顺序值得记下来（**先证明是哪个环节坏了**，别一上来就换镜像）：
+
+| 试的 | 结果 | 说明什么 |
+|---|---|---|
+| `pip --version` 重定向到文件 | 正常写出 80 字节 | pip 本身能启动（控制台空白是终端捕获问题）|
+| `pip install --no-index` | **立即**报 `No matching distribution` | 参数解析、日志都正常 → 卡在**网络层** |
+| 纯 `urllib` 取同一个索引页 | 正常返回，0.2 s | 网络本身通 |
+| 换 ustc / pypi.org | 12.5 s / 48.4 s | 不是单个镜像的问题 |
+
+**结论：pip 的 HTTP 层在这台机器上会被掐断。** 这已经是同一根因的**第 3 次**（`Invoke-WebRequest` 报"基础连接已经关闭"、ViT 权重下到 60% 报 hash 不匹配、pip 停在 `CloseWait`）。
+
+**绕法：让 pip 完全不联网。**
+
+```powershell
+python practice/tools/fetch_wheels.py transformers peft
+.venv\Scripts\python.exe -m pip install --no-index --find-links=.pip-tmp\wheels transformers peft
+```
+
+`fetch_wheels.py` 做的事：抓 `mirrors.aliyun.com/pypi/simple/<包名>/` 索引 → 用 `packaging` 的 `parse_wheel_filename` 过滤 `cp313` + `win_amd64` + `py3-none-any` → 取最高版本 → 下 wheel → **读 wheel 里 `*.dist-info/METADATA` 的 `Requires-Dist` 递归展开依赖**。
+
+**踩的两个坑**：
+
+1. **依赖只展开一层会漏包**。第一版只展开一层，`click` 没被拉进来，`pip install` 时才报错。必须循环到没有新包为止。
+2. **`parse_wheel_filename` 返回的不是 `(py, abi, plat)` 元组**，是 `Tag` 对象集合，属性名是 `interpreter` / `abi` / `platform`（**不是** `python`）。
+
+**结果**：18 个 wheel / 22.4 MB，一次装好 transformers 5.22.1 + peft 0.21.2。
+
+> **通用教训**：这台机器的长连接会被随机掐断。**凡是下载，都必须自己做断点续传 + 重试 + 校验和。**
+
+---
+
+### 3. 台阶 1：GPT-2 不用 `nn.Linear`，用 `Conv1D`
+
+`transformers` 的 GPT-2 实现里 **48 个 `Conv1D`，只有 1 个 `nn.Linear`**（`lm_head`）。
+
+```
+transformer.h.0.attn.c_attn   Conv1D(nf=2304, nx=768)   weight (768, 2304)   ← QKV 融合
+transformer.h.0.attn.c_proj   Conv1D(nf=768,  nx=768)   weight (768, 768)
+transformer.h.0.mlp.c_fc      Conv1D(nf=3072, nx=768)   weight (768, 3072)
+transformer.h.0.mlp.c_proj    Conv1D(nf=768,  nx=3072)  weight (3072, 768)
+```
+
+源码（`transformers/pytorch_utils.py`）：
+
+```python
+self.weight = nn.Parameter(torch.empty(nx, nf))
+def forward(self, x):
+    size_out = x.size()[:-1] + (self.nf,)
+    x = torch.addmm(self.bias, x.view(-1, x.size(-1)), self.weight)
+    return x.view(size_out)
+```
+
+**`torch.addmm` 不做转置。** docstring 原话：*"works like a linear layer but the weights are transposed"*。
+
+对比：
+
+| | 权重形状 | 计算 |
+|---|---|---|
+| `nn.Linear(in, out)` | `(out, in)` | `x @ W.T + b` |
+| `Conv1D(nf=out, nx=in)` | **`(in, out)`** | `x @ W + b` |
+
+**所以 `LoRALinear` 直接包会形状对不上。** 这是这一课唯一的真难点。
+
+**参数账（124,439,808 拆开）**：
+
+| 项 | 参数 | 占比 |
+|---|---|---|
+| 嵌入 `wte` + `wpe` | 39,383,808 | **31.6%** |
+| 12 层（attn 2,362,368 + MLP 4,722,432 + LN 3,072 每层）| 85,054,464 | 68.3% |
+| `ln_f` | 1,536 | 0.001% |
+
+**嵌入占 31.6%——这是 mini GPT（80 万参数）里根本不存在的成本。** 词表 50,257 是最大的单项。
+
+---
+
+### 4. 台阶 2–3：零样本 1.929，我估错了一倍
+
+我预估 GPT-2 零样本在莎士比亚上是 **0.8–1.0 BPC**。实测 **1.9288**。
+
+```
+平均 nats/token   4.1355
+PPL               62.52
+字符/token        3.093
+BPC               1.9288
+均匀分布 ln(50257) = 10.8249 nats/token = 5.0487 BPC
+```
+
+**为什么错了**：莎士比亚是**古英语**，对 WebText 训出来的 GPT-2 是**半分布外**。而且 GPT-2 small 只有 124M 参数，训练数据 40 GB——它在"预测下一个 token"这件事上是宽而浅，不是深而精。
+
+**最有说服力的证据是词表**：
+
+| 古英语 | token 数 | 现代对应词 | token 数 |
+|---|---|---|---|
+| thou | **2**（`th\|ou`）| you | **1** |
+| thee | **2**（`the\|e`）| your | **1** |
+| hath | **2**（`h\|ath`）| has | **1** |
+| doth | **2**（`d\|oth`）| does | **1** |
+| shalt | **2**（`sh\|alt`）| shall | **1** |
+
+**莎士比亚最高频的词每一个都要两块积木，现代对应词都是一块。** BPE 的 merge 是在 WebText 上按频率学的，`thou` 不常见所以没并。这就是"预训练税"的具体形状。
+
+**实测**：语料里实际出现 **11,706 / 50,257 = 23.3%** 的 token，**76.7% 的 embedding 行在本任务上是死的**（`38,551 × 768 = 29.6M` 参数，占全网 23.8%）。
+
+**零样本生成的失败方式也很说明问题**——prompt `"ROMEO:\n"`：
+
+> **ROMEO:** There are no other options for this game and I was really happy that you can do it from one place. ... A new "Mystery" mode.
+
+语法通顺、局部连贯，但**没有一句是莎士比亚**，它把 `ROMEO:` 当成了产品名。**BPC 可信，但 BPC 不承诺生成风格。**
+
+---
+
+### 5. 台阶 4：peft 把整个流程变成一行
+
+```python
+from peft import LoraConfig, get_peft_model
+
+cfg = LoraConfig(
+    r=8,
+    lora_alpha=16,
+    target_modules=["c_attn", "attn.c_proj"],
+    lora_dropout=0.0,
+    bias="none",
+    fan_in_fan_out=True,      # ← 关键，见下
+)
+model = get_peft_model(model, cfg)
+model.print_trainable_parameters()
+```
+
+**`target_modules` 是 `endswith("." + name)` 匹配，不是精确相等。** GPT-2 每个 block 里 `c_proj` 出现两次：
+
+```
+transformer.h.0.attn.c_proj     (768,  768)   ← 注意力的输出投影
+transformer.h.0.mlp.c_proj      (3072, 768)   ← MLP 的，不是注意力
+```
+
+写 `"c_proj"` 会**同时命中两个**，把 MLP 也改了。想只打注意力（论文 §4.2 的 Wq/Wk/Wv/Wo），必须写 **`"attn.c_proj"`**。
+
+**`fan_in_fan_out=True`** 就是告诉 peft"这个模块的权重是 `(in, out)` 而不是 `(out, in)`"。不给这个参数，peft 会按 `nn.Linear` 的形状去算 `A`/`B`，结果是**形状能对上但乘错了方向**——比报错更难查。
+
+**结果（5 轮，r=8，target=attn，lr=1e-3，单 seed 1337）**：
+
+```
+可训练参数   442,368  (0.3555%)
+BPC          1.9288  →  1.5962
+显存峰值     4.22 GB
+耗时         95 s / 365 步
+```
+
+**逐轮**：
+
+| epoch | BPC | 本轮收益 |
+|---|---|---|
+| 0（零样本）| 1.9288 | — |
+| 1 | 1.6312 | **0.2976（89.5%）** |
+| 2 | 1.6097 | 0.0215 |
+| 3 | 1.6022 | 0.0075 |
+| 4 | 1.5992 | 0.0030 |
+| 5 | 1.5962 | 0.0030 |
+
+**从零样本到第 1 轮吃掉 89.5% 的总收益。** 这和 ViT 上"5 轮涨 2.72 点、15 轮再涨 1.67 点"的曲线形状完全不同——**任务越接近预训练分布，微调越快饱和。**
+
+---
+
+### 6. 台阶 5：手写注入 `Conv1D`，只差一个 `.T`
+
+`LoRAConv1D` 包住 `Conv1D`，做和 `LoRALinear` 一模一样的事：
+
+```python
+class LoRAConv1D(nn.Module):
+    def __init__(self, base, r=8, alpha=16, dropout=0.0):
+        super().__init__()
+        self.base = base
+        in_f, out_f = base.weight.shape          # 注意：Conv1D 是 (in, out)
+        self.lora_A = nn.Parameter(base.weight.new_empty(r, in_f))
+        self.lora_B = nn.Parameter(torch.zeros(out_f, r))   # B=0，和 peft 一致
+        self.scaling = alpha / r
+        self.merged = False
+
+    def forward(self, x):
+        out = self.base(x)
+        if self.merged:
+            return out
+        delta = self.lora_dropout(x) @ self.lora_A.T @ self.lora_B.T
+        return out + delta * self.scaling
+```
+
+**关键：增量表达式和 `LoRALinear` 一字不差。**
+
+```
+x @ A.T @ B.T      # (…, in) @ (in, r) → (…, r) @ (r, out) → (…, out)
+```
+
+因为 `A` 的形状是 `(r, in)`、`B` 是 `(out, r)`，`B@A` 是 `(out, in)`——**正好等于 `nn.Linear` 的权重形状**，也**正好等于 `Conv1D` 权重的转置**。所以前向完全一样。
+
+**唯一要改的是 `merge()`：**
+
+```python
+# LoRALinear：base.weight 是 (out, in)，和 B@A 同形
+self.base.weight.data += self.scaling * (self.lora_B @ self.lora_A)
+
+# LoRAConv1D：base.weight 是 (in, out)，要转置
+self.base.weight.data += self.scaling * (self.lora_B @ self.lora_A).T
+```
+
+> **一句话：前向不用改，merge 多一个 `.T`。** 报错的永远是 merge，不是 forward——而 merge 只在推理/导出时才调，所以这个 bug 会潜伏到你以为万事大吉的那一刻。
+
+---
+
+### 7. 三个验收，和那个"通过但毫无意义"的测试
+
+| 验收 | 判据 | 实测 |
+|---|---|---|
+| **V1 参数数** | 应等于手算的 `r×(in+out)` 逐层求和 | ✅ 442,368，完全相等 |
+| **V2 前向等价** | `B=0` 时输出 == 原模型 | 最大绝对差 **0.000e+00**（logits 平均绝对值 124.170）|
+| **V2b 非平凡** | `B≠0` 时**必须**有差 | 把 `B` 临时填 `randn*1e-3` → 差非零，测完还原 |
+| **V3 merge 可逆** | merge 后权重变、前向不变、unmerge 还原 | 权重变化 **1.594e-02**、前向差 **9.155e-05**、还原差 **6.104e-05** |
+
+**V2 第一版是假的。** `B` 初始化成 0，增量**恒为 0**——"最大绝对差 0.000e+00"测的是 `0 == 0`，和我的实现正确与否**毫无关系**。
+
+> **测试通过不等于实现正确，要看它能不能失败。**
+>
+> 任何"应该相等"的断言，都必须配一个"把它改坏、断言必须失败"的对照。否则你验证的是恒等式，不是被测代码。
+
+**训练结果对照**：
+
+| | 可训练 | BPC |
+|---|---|---|
+| `peft` | 442,368 | **1.5962** |
+| 手写 | 442,368 | **1.5970** |
+
+差 **+0.0008**。差额来自两处配置不同：`peft` 跑的是 `lora_dropout=0.0`，手写版为了验证 dropout 路径用的是 0.05。**同一 seed、同一数据、同一 lr，实现等价的证据是这 0.0008，不是"差不多"。**
+
+---
+
+### 8. 结论：换成语言模型，那几条结论一条都没变
+
+**① r 不是瓶颈。** 5 轮、target=attn：
+
+| r | 可训练 | 占比 | BPC |
+|---|---|---|---|
+| 4 | 221,184 | 0.178% | 1.6015 |
+| 8 | 442,368 | 0.356% | **1.5962** |
+| 16 | 884,736 | 0.711% | **1.5888** |
+
+**参数翻 4 倍，BPC 只动 0.0079（0.49%）。r=4 已经拿到 r=16 全部收益的 72%。**
+
+ViT 上是 0.83 点（51 张图）、GPT-2 上是 0.0049 BPC——**两个架构、两个任务、两个代码库，同一个结论。这不再是巧合。**
+
+**② LoRA 省的是梯度和优化器状态，激活值一分没省。** GPT-2 的 4.22 GB 拆开：
+
+| 项 | 大小 |
+|---|---|
+| 权重（冻结的 base + LoRA） | 498 MB |
+| `lm_head` 的 logits `(1, 1024, 50257)` fp32 | **412 MB** |
+| 同一个 logits 的梯度 | **412 MB** |
+| 12 层 attention 的 Q/K/V/输出 | 604 MB |
+| 12 层 MLP 中间激活 | 302 MB |
+| 残差流保存 | 150 MB |
+| LN / dropout mask / cuBLAS 工作区 / 碎片 | ~650 MB |
+
+**反直觉的地方**：logits + 它的梯度 = 824 MB，占 4.22 GB 的 **20%**，比全部 LoRA 参数（**1.7 MB**）大 **480 倍**。
+
+而且**冻结 `lm_head` 也不省这块**——损失必须在它上面算。**这正是"薄模型"（大词表 + 少层数）在大词表上吃显存的真实原因。**
+
+**③ 预训练值多少。** 2×2 归因表：
+
+| | 无预训练 | 有预训练 |
+|---|---|---|
+| **无目标域训练** | 均匀 5.05 / unigram 4.78 / bigram 3.58 | **GPT-2 零样本 1.929** |
+| **有目标域训练** | **mini GPT 2.492** | **GPT-2 + LoRA 1.596** |
+
+- 从零训练（左列）：5.05 → 2.49，**值 0.563**
+- 预训练（右列）：1.929 → 1.596，**值 0.333**
+- 预训练 vs 从零（下排）：2.492 → 1.596，**值 0.896**
+
+**0.896 的差距里，"预训练本身"只贡献了 0.563，剩下的 0.333 是"在目标域上继续训"。两者都得有。**
+
+---
+
+### 9. 三个"看起来懂了其实没懂"的地方
+
+**① `Conv1D` 不是卷积。** 它名字叫 Conv1D，源码就是一个 `addmm`——**纯矩阵乘，没有滑动窗口、没有 kernel、没有 padding**。名字是历史遗留。判断一个模块"能不能被 LoRA 包"，看的是**它有没有一个可加的权重矩阵**，不是它叫什么。
+
+**② `fan_in_fan_out` 不是玄学。** 它只回答一个问题：**你的权重矩阵是 `(out, in)` 还是 `(in, out)`？** `nn.Linear` 是前者，`Conv1D` 是后者。给错了，形状能对上、数值全错。
+
+**③ 冻结了就别指望激活省下来。** 只要梯度要穿过某个张量，PyTorch 就必须把它的前向值存下来（否则反向算不出梯度）。LoRA 的 `lora_A/lora_B` 分散在 12 个 block 里 → **梯度必须从 loss 一路穿回第一层** → 每一层的中间激活全都要存。这就是为什么 `head_only` 只要 0.59 GB（`requires_grad=False`，**根本不建图**），而 LoRA 要 3.70 GB。
+
+---
+
+### 10. 局限
+
+- **单 seed**。r 之间 0.0079 BPC 的差没有统计显著性
+- **台阶 6（全量微调）没做**，"预训练到底值多少"这一格只有 LoRA 那一半
+- **只扫 3 个 r**，论文扫到 64 以上才见收益拐点
+- **没做"只加 Wq/Wv"**（论文 §4.2）这一格
+- **BPC 的分母是字符数**，对中文这类多字节语言会失真
+
+---
+
+### 自检问题
+
+1. 为什么 mini GPT 的 `1.7271` 和 GPT-2 的 `4.1355` **不能直接比**？给出换算过程和 GPT-2 的 BPC。
+2. PPL 和 BPC 在这件事上为什么结论相反？各自动了什么手脚？
+3. GPT-2 每个 block 里 `c_proj` 出现几次？写 `target_modules=["c_proj"]` 会发生什么？
+4. `Conv1D` 的权重形状是 `(in, out)`，那 `LoRAConv1D` 里**哪一行**必须和 `LoRALinear` 不同？为什么 forward 不用改？
+5. 你的 V2 测试"最大绝对差 0.000e+00"。为什么这**不能**证明实现正确？怎么改？
+6. LoRA 只占 4.22 GB 里的 1.7 MB，那剩下 4.2 GB 是谁？为什么冻结 `lm_head` 也省不掉最大的那两块？
+7. 为什么 `head_only` 只要 0.59 GB 而 LoRA 要 3.70 GB？两者 `requires_grad=False` 的部分有什么本质区别？

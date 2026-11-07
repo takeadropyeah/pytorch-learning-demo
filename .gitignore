@@ -49,3 +49,9 @@ plan-3months-remote.md
 # TORCH_HOME 被 13_vit_finetune.py 指到 .cache/torch（家目录那个建不了）。
 # 权重是几百 MB 的二进制，不进仓库。
 .cache/
+
+# ---- pip 离线 wheel 缓存 ----
+# tools/fetch_wheels.py 把 wheel 下到 .pip-tmp/wheels/，让 pip 完全离线安装。
+# 22 MB 二进制，不进仓库（脚本本身在仓库里，跑一遍就能重建）。
+.pip-tmp/
+.pip-cache/

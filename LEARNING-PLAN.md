@@ -382,7 +382,7 @@ print(torch.cuda.max_memory_allocated() / 1024**3, "GB")
 
 ## 九、进度追踪
 
-> 最后更新：2026-10-31
+> 最后更新：2026-11-07
 
 - [x] W1 工程化 baseline（可复现）——`practice\01_baseline.py`，连跑 3 次逐位一致；**A1 成本画像已完成**（`results.csv` 加 `params/macs_g/infer_ms` 三列，19 行回填，产出 `results_cost_accuracy.png`）
 - [~] W2 MLP on MNIST >97%——**跳过并已被超额替代**：MLP 骨架在 `examples\03` 已写过，MNIST CNN 在 `examples\04` 跑出 98.62%；W2 原定的窗口改用来做了 **Attention → Transformer**（见 S10/S11）
@@ -403,6 +403,8 @@ print(torch.cuda.max_memory_allocated() / 1024**3, "GB")
 - [x] S10 Attention：手写 scaled dot-product——`practice\07_attention.py`（47 行）+ `08_mha.py`（多头），**与 `nn.MultiheadAttention` 逐位一致（5.96e-08）**；演示脚本 `tools\demo_attention.py`
 - [x] S11 Transformer 从零：小 GPT 能生成文本——`09_transformer_block.py`（Pre-LN block，4.77e-07）、`10_pos_and_mask.py`（正弦编码 + 因果掩码）、`11_mini_gpt.py`（**实验 #22**：3000 步 39 秒，val 4.21 → **1.7271**，困惑度 60 → 5.6，能生成莎士比亚风格文本）
 - [x] S12 预训练 + 微调：线性探针 / 全量 / LoRA 三方法对照——`practice\13_vit_finetune.py` + `14_lora_vit.py` + `lora.py`（手写 `LoRALinear`，5 个测试全过），Flowers102 上 **84.11 / 94.26 / 92.57%**（实验 #28–#37）。核心结论：**LoRA 用 0.94% 参数差 1.69 点、显存省 27.5%**；且全量微调 lr 放大 10 倍会崩 12.06 点而 LoRA 正常。
+- [x] S13 换架构、换任务、换代码库再验一遍 LoRA——`15_gpt2_smoke.py` / `16_gpt2_bpc.py` / `17_gpt2_lora.py`（peft）/ `18_gpt2_lora_hand.py`（手写 `LoRAConv1D`）。GPT-2 small 零样本 **BPC 1.9288** → LoRA **1.5962**（442,368 参数 / 0.3555%），手写版 **1.5970**，三个验收逐位对账。**r 不是瓶颈这条在第二个架构上依旧成立**（r 4→16 只动 0.49%）。配套 `tools\fetch_wheels.py`（离线 wheel）、`tools\fetch_gpt2.py`（断点续传）。
+- [ ] S13+ 台阶 6：GPT-2 **全量微调**对照（补上"预训练到底值多少"那格的另一半）
 
 > **走法偏离记录**：实际是 W1→W3→W4→W7 跳着走的，越过了阶段 4（经典架构手写）直接进阶段 5（ResNet）。
 > 这不是错误——CIFAR-10 这条线从 74.97% 打到了 95.07%，实验能力和工程化都远超计划预期。

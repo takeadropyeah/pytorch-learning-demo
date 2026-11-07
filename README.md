@@ -6,11 +6,11 @@
 
 1. **消融研究** —— 在 CIFAR-10 上复现 ResNet 论文（He et al., CVPR 2016）的**退化现象**，用三条互相独立的读数把它与「过拟合」区分开
 2. **手写 Transformer 全栈** —— 单头 / 多头注意力、Pre-LN Block、位置编码、因果掩码，与 PyTorch 官方实现**逐位对齐**，并跑通 char-level mini GPT 与 ViT
-3. **预训练模型微调与 LoRA** —— 在 Flowers102 上做**线性探针 / 全量微调 / 手写 LoRA** 三档对照，量化「省多少参数、付多少精度」
+3. **预训练模型微调与 LoRA** —— 在 Flowers102（ViT，图像）与莎士比亚（GPT-2，语言）上做**线性探针 / 全量微调 / 手写 LoRA** 对照，量化「省多少参数、付多少精度」，并用三个逐位验收证明手写实现与 `peft` 等价
 
 - 研究简报：[`research-brief.md`](research-brief.md)
-- 实验台账：[`practice/EXPERIMENTS.md`](practice/EXPERIMENTS.md) · [`practice/results.csv`](practice/results.csv) · [`practice/results_flowers.csv`](practice/results_flowers.csv)
-- 中文笔记（15 课）：[`practice/NOTES.md`](practice/NOTES.md)
+- 实验台账：[`practice/EXPERIMENTS.md`](practice/EXPERIMENTS.md) · [`practice/results.csv`](practice/results.csv) · [`practice/results_flowers.csv`](practice/results_flowers.csv) · [`practice/results_gpt2.csv`](practice/results_gpt2.csv)
+- 中文笔记（16 课）：[`practice/NOTES.md`](practice/NOTES.md)
 
 ---
 
@@ -128,6 +128,49 @@ LoRA 的 `lora_A/lora_B` 分散在 12 个 block 里 → 梯度要穿过整个 ba
 
 写一遍不是为了省那 340 行代码，是为了**用两条独立路径验证同一个实现**，并且真正搞懂 `target_modules` 为什么是个坑。
 
+### 换一个架构再验一遍：GPT-2（语言模型）
+
+上面全部是 ViT/图像分类。为了排除「这些结论只是 ViT 的偶然」，把**架构、任务、代码库**同时换掉再跑一次——只保留「LoRA」这一个不变项：
+
+| | ViT-B/16 · 图像 | GPT-2 small · 语言 |
+|---|---|---|
+| 任务 | 分类（Flowers102，102 类） | 语言建模（莎士比亚，65 词/50,257 词表）|
+| 线性层类型 | `nn.Linear`（`(out,in)`）| **`Conv1D`（`(in,out)`）** |
+| 指标 | test 准确率 | **BPC（bits/字符）** |
+| 零样本 / 只训头 | 84.11% | **1.9288** |
+| LoRA | 92.57%（0.94%）| **1.5962**（0.3555%）|
+| 全量微调 | 94.26% | 未做 |
+
+**为什么是 BPC 而不是 loss**：mini GPT 的 `1.7271` 是 nats/**字符**，GPT-2 的是 nats/**token**（3.093 字符/token）。直接比 loss 会得出「GPT-2 差 2.4 倍」这种反向结论。`BPC = 总 nats ÷ ln2 ÷ 原文字符数`——只认原文字符，与分词方式无关。
+
+**六层基线，同一段验证集：**
+
+```
+均匀分布          5.049
+unigram(65)       4.78
+bigram(4225)      3.58
+mini GPT 从零训   2.492   (809,856 参数)
+GPT-2 零样本      1.929   (124,439,808 参数)
+GPT-2 + LoRA      1.596   (442,368 可训练)
+```
+
+**两条跨架构一致的结论：**
+
+- **r 不是瓶颈**：ViT 上 r 4→16 参数翻 4 倍、test 只动 0.83 点；GPT-2 上翻 4 倍、BPC 只动 0.0079（0.49%）。r=4 已拿到 r=16 收益的 72%。**两个架构、两个任务、两个代码库，同一个结论。**
+- **LoRA 省的是梯度和优化器状态，激活值一分没省**：GPT-2 的 4.22 GB 里，LoRA 参数本身只有 **1.7 MB**；`lm_head` 的 logits + 梯度占 824 MB（20%），**冻结 `lm_head` 也省不掉**。
+
+**手写 vs `peft`，三个验收逐位对账：**
+
+| 验收 | 实测 |
+|---|---|
+| V1 参数数 = 手算 `r×(in+out)` 逐层求和 | 442,368，完全相等 |
+| V2 `B=0` 时前向等价（最大绝对差） | **0.000e+00** |
+| V2b `B≠0` 时差必须非零（防「0==0」假通过） | 非零 ✅ |
+| V3 merge 后权重变、前向不变、unmerge 还原 | 1.594e-02 / 9.155e-05 / 6.104e-05 |
+| 训练结果 | 手写 **1.5970** vs peft **1.5962**（差 0.0008，来自 dropout 0.05 vs 0.0）|
+
+**唯一的真难点**：GPT-2 用 `Conv1D` 而不是 `nn.Linear`，权重形状是 `(in, out)`。所以增量表达式 `x @ A.T @ B.T` 一字不用改，**只有 `merge()` 要多一个 `.T`**——而这个 bug 只在推理/导出时才触发。
+
 ---
 
 ## 三、另外两组工作
@@ -207,6 +250,24 @@ python .\14_lora_vit.py     --epochs 15 --lora-r 4 --tag lora_r4_15ep
 
 首次运行会自动下载 Flowers102（329 MB）与 ViT-B/16 权重（330 MB）。如果下载慢，见 `NOTES.md` 附录「慢下载怎么破」。
 
+### GPT-2 跨架构验证（各约 1.5–3 分钟，莎士比亚语料 1 MB）
+
+```powershell
+python .\tools\fetch_gpt2.py                       # 断点续传，548 MB，双镜像轮换
+python .\15_gpt2_smoke.py                          # 四条断言：124,439,808 参数 / 48 个 Conv1D / 词表 50,257 / 一次前向
+python .\16_gpt2_bpc.py                            # 零样本 BPC 1.9288（含 --gen 看生成质量）
+python .\17_gpt2_lora.py --lora-r 8 --epochs 5     # peft  → BPC 1.5962
+python .\17_gpt2_lora.py --lora-r 4 --epochs 5     # peft  → BPC 1.6015
+python .\18_gpt2_lora_hand.py --epochs 5 --verify  # 手写  → 1.5970 + V1/V2/V3 三个验收
+```
+
+装依赖时如果 `pip install` 卡住不动，用离线路径（见 `NOTES.md` 第 16 课 §2）：
+
+```powershell
+python .\tools\fetch_wheels.py transformers peft
+..\.venv\Scripts\python.exe -m pip install --no-index --find-links=.pip-tmp\wheels transformers peft
+```
+
 ### 手写 Transformer 各组件的自检（不需要 GPU，几秒跑完）
 
 ```powershell
@@ -225,6 +286,7 @@ python .\11_mini_gpt.py           # 3000 步 39 秒，val 4.21 → 1.73
 |---|---|
 | `practice/results.csv` | CIFAR-10 / MNIST 训练 29 条 |
 | `practice/results_flowers.csv` | ViT 微调与 LoRA 10 条 |
+| `practice/results_gpt2.csv` | GPT-2 LoRA r 扫描 3 条（手写版是对账用的验证运行，结论记在 `NOTES.md` 第 16 课，不占台账行）|
 
 一行一次训练：
 
@@ -254,6 +316,8 @@ python .\11_mini_gpt.py           # 3000 步 39 秒，val 4.21 → 1.73
 - **LoRA 只落在 FFN 上，没碰 attention**。原因写在 `NOTES.md` 第 15 课：`torchvision` 的 `nn.MultiheadAttention` 里，`in_proj_weight` 是裸 Parameter（换不掉）、`out_proj` 被 fast path 直接读 `.weight` 绕过 `forward`。HF 与 timm 都没有这个障碍。
 - **LoRA 每种配置只有 1 个 seed**，r=4/8/16 之间的 0.83 点差异在噪声内。
 - **LoRA 只跑了 lr=1e-3**，没跑 lr=1e-4。所以「对 lr 鲁棒」只有「1e-3 下没崩」的证据。
+- **GPT-2 上没有全量微调那一格**，所以「预训练到底值多少」只有 LoRA 那一半；r 之间 0.0079 BPC 的差同样没有统计显著性。
+- **BPC 的分母是字符数**，跨到中文这类多字节语言会失真（一个汉字 3 字节，按字符算会高估）。
 
 ---
 

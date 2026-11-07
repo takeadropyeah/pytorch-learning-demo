@@ -39,6 +39,35 @@
 
 # 日志正文（最新的在最上面）
 
+## 2026-11-07 · 星期六 · W3：把 LoRA 搬到 GPT-2 上，结论没变
+
+**做了什么**
+- **台阶 0**：`pip install` 停在 `CloseWait` 十几分钟零输出 → 自写 `tools\fetch_wheels.py`，下 18 个 wheel（22.4 MB）离线装 → transformers 5.22.1 + peft 0.21.2
+- **台阶 1**：`tools\fetch_gpt2.py`（断点续传 + 双镜像）拉下 GPT-2 small 548 MB；`15_gpt2_smoke.py` 钉死 **124,439,808** 参数、**48 个 `Conv1D` + 1 个 `nn.Linear`**
+- **台阶 2–3**：`16_gpt2_bpc.py` —— 先解决"不能比"的问题，GPT-2 零样本 **BPC 1.9288**
+- **台阶 4**：`17_gpt2_lora.py`（peft）—— **1.9288 → 1.5962**，442,368 参数（0.3555%），4.22 GB，95 s；r=4/8/16 三组
+- **台阶 5**：`18_gpt2_lora_hand.py` —— 手写 `LoRAConv1D` 注入 `Conv1D`，**1.5970**，与 peft 差 0.0008；V1/V2/V3 三个验收全过
+- 写记录：`EXPERIMENTS.md` 新增「GPT-2 上的跨架构验证」整节 + 「崩过的实验」加 3 行；`NOTES.md` 第 16 课
+
+**学到的**
+- **必须先换算 BPC 才能比**：mini GPT 的 1.7271 是 nats/字符，GPT-2 的 4.1355 是 nats/token（3.093 字符/token）。直接比会得出"GPT-2 差 2.4 倍"这种反向结论
+- **r 不是瓶颈这条，换个架构还是成立**：ViT 上参数翻 4 倍动 0.83 点，GPT-2 上翻 4 倍动 0.0079 BPC（0.49%）。r=4 已拿到 r=16 收益的 72%
+- **LoRA 省的是梯度和优化器状态，激活值一分没省**。4.22 GB 里 LoRA 本身只占 **1.7 MB**；`lm_head` 的 logits + 梯度占 824 MB（20%），而且**冻结 lm_head 也省不掉**
+- **几乎全部收益在第一个 epoch**：1.9288 → 1.6312 吃掉 89.5% 总收益。任务越接近预训练分布，微调越快饱和
+- **`Conv1D` 不是卷积**，就是 `addmm`；权重是 `(in, out)` 而不是 `(out, in)`。前向表达式不用改，**只有 `merge()` 多一个 `.T`**
+- **测试会"通过但毫无意义"**：B=0 时 V2 等价测试差 0.000e+00，测的是 `0 == 0`。必须补一个"把 B 改成非零、差值必须非零"的对照
+
+**踩的坑**
+- pip 的 HTTP 层坏（同一根因第 3 次：`Invoke-WebRequest` 断连、ViT 权重下到 60% hash 失败、pip 停 `CloseWait`）
+- `parse_wheel_filename` 返回 `Tag` 对象，属性是 `interpreter`/`abi`/`platform`，**不是** `python`
+- 依赖只展开一层会漏包（漏了 `click`，装的时候才报错）
+- `target_modules` 是 `endswith` 匹配：写 `"c_proj"` 会同时打中 `attn.c_proj` 和 `mlp.c_proj`
+
+**明天第一件事**
+- 改简历（把 ViT 那条升级成「LoRA 跨架构验证」：ViT-B/16 图像 92.57%、GPT-2 语言 BPC 1.929→1.596，手写与 `peft` 逐位对账）+ 发郑侠武、刘松桦两封
+
+**提交**：未提交
+
 ## 2026-11-06 · 星期五 · W3：ViT 微调 → LoRA，结论翻了两次
 
 **做了什么**

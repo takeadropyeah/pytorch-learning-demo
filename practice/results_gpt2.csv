@@ -1,0 +1,4 @@
+tag,r,alpha,targets,epochs,lr,trainable,total,val_bpc,base_bpc,peak_gb,secs
+lora_r8_attn,8,16,attn,5,0.001,442368,124439808,1.5962,1.9288,4.22,94.7
+lora_r4_attn,4,8,attn,5,0.001,221184,124439808,1.6015,1.9288,4.22,100.6
+lora_r16_attn,16,32,attn,5,0.001,884736,124439808,1.5888,1.9288,4.23,99.8
