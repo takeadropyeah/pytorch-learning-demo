@@ -39,6 +39,38 @@ LoRA 的 forward，低秩增量被静默忽略——能跑、能收敛、但什�
 共 24 个。r=8 时 737,280 个 LoRA 参数 + 78,438 分类头 = 815,718，
 占全模型 85,877,094 的 **0.95%**。
 
+=============================================================================
+后记：这两个障碍是可以拆掉的，加 --swap-attn
+=============================================================================
+上面两个障碍都不是「attention 不能加 LoRA」，而是「**torchvision 这个 MHA 的实现**
+不让加」。拆法有两个，第二个才治本：
+
+**治标**：只包 out_proj，并忍下 `AttributeError`。
+没用——快路径绕过 forward 的那个坑还在。
+
+**治本**：把 nn.MultiheadAttention 整个换成 08_mha.py 的手写实现
+（`--swap-attn`）。手写版有 wq/wk/wv/wo **四个真 nn.Linear**，且 EncoderBlock
+通过 `module(x)` 正常调用它们，两个判据都满足。
+
+换的时候必须把权重搬过去并**验证前向一致**（实测 2.399e-06），否则就不是
+「同一个起点 + LoRA」，而是「换了一个模型」。`swap_vit_attention()` 里那道
+`assert diff < 1e-5` 就是干这个的。
+
+顺带修好了 fast path 问题：手写实现是纯 PyTorch 算出来的，没有
+`torch._native_multi_head_attention` 那条捷径，LoRA 的 delta 不可能被吞。
+
+于是同一份代码可以跑四种对照：
+
+    --targets mlp.0,mlp.3                      LoRA 落在 FFN     默认
+    --swap-attn                                LoRA 落在 wq,wv   （论文 §4.2 的配置）
+    --swap-attn --targets ...wq,...wv,mlp.0,mlp.3   两处都加
+    --swap-attn --targets ...wq,...wk,...wv,...wo   四个投影全加
+
+这也顺带说明一件更普遍的事：**「某方法在这个库上做不了」通常不等于「方法不行」，
+而是「这个库的内部实现让包裹失效」**。同一个道理在量化、权重绑定、
+torch.compile、flash-attention 融合 kernel 上都成立——凡是上层直接读参数而不
+调 forward 的地方，包裹都会静默失效。
+
 （顺带一提：FFN 的 LoRA 参数比 attention 大得多，因为中间维度 3072 是 768 的 4 倍。
 在 HuggingFace 里如果只加 q_proj/v_proj，参数会明显少于这里。）
 """
@@ -146,6 +178,69 @@ def merge_check(model: nn.Module, sample: torch.Tensor) -> float:
 # ============================================================================
 # 主流程
 # ============================================================================
+# ============================================================================
+# 把 torchvision 的 nn.MultiheadAttention 换成 08_mha.py 的手写实现
+# ============================================================================
+class ViTAttnAdapter(nn.Module):
+    """让手写的 MultiHeadSelfAttention 冒充 nn.MultiheadAttention。
+
+    为什么需要适配器：torchvision 的 EncoderBlock 是这么调的（vision_transformer.py:113）
+
+        x, _ = self.self_attention(x, x, x, need_weights=False)
+
+    它按 nn.MultiheadAttention 的三参 + 返回 tuple 签名调用。手写的那个是
+    `forward(x, attn_mask=None)` 自注意力，签名对不上，所以包一层做翻译。
+
+    包完之后 `wq/wk/wv/wo` 都是**真 nn.Linear**，且上层通过 `module(x)` 正常调用
+    —— LoRA 包裹的两个判据都满足了，attention 终于可以被注入。
+
+    顺带解决的还有 fast path 问题：nn.MultiheadAttention 在条件满足时会走
+    torch._native_multi_head_attention，直接读 out_proj.weight 而不调 out_proj.forward，
+    导致 LoRA 的 delta 被静默丢弃。换成显式调用的实现后，那条路径根本不存在。
+    """
+
+    def __init__(self, d: int, h: int, mha_cls):
+        super().__init__()
+        self.mha = mha_cls(d, h)
+        self.embed_dim = d
+        self.num_heads = h
+        self.batch_first = True
+
+    def forward(self, query, key, value, need_weights: bool = False,
+                attn_mask=None, average_attn_weights: bool = True,
+                is_causal: bool = False):
+        # 只做自注意力：ViT 的 query/key/value 传进来是同一个张量
+        out = self.mha(query, attn_mask=attn_mask)
+        # torchvision 会解包 `x, _`，所以第二项必须给
+        return out, None
+
+
+@torch.no_grad()
+def swap_vit_attention(model: nn.Module, device: str) -> None:
+    """12 个 EncoderBlock 的 self_attention 全部换成手写实现，并搬运权重。
+
+    搬运是必须的：换实现不等于重训，换完之后前向必须和原来**逐位接近**，
+    否则后面所有实验都不再是「同一个起点 + LoRA」，而是「另一个模型」。
+    """
+    mha_cls = _load("mha08", "08_mha.py").MultiHeadSelfAttention
+    for i, blk in enumerate(model.encoder.layers):
+        old = blk.self_attention
+        d, h = old.embed_dim, old.num_heads
+        new = ViTAttnAdapter(d, h, mha_cls).to(device)
+
+        # nn.MultiheadAttention 把 QKV 存成一个 (3d, d) 的大矩阵，
+        # 手写实现是三个独立 Linear。按 [0:d] / [d:2d] / [2d:3d] 切开。
+        W, b = old.in_proj_weight.detach(), old.in_proj_bias.detach()
+        for k, lin in enumerate((new.mha.wq, new.mha.wk, new.mha.wv)):
+            lin.weight.copy_(W[k * d:(k + 1) * d])
+            lin.bias.copy_(b[k * d:(k + 1) * d])
+        new.mha.wo.weight.copy_(old.out_proj.weight.detach())
+        new.mha.wo.bias.copy_(old.out_proj.bias.detach())
+
+        blk.self_attention = new
+    return len(model.encoder.layers)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="给预训练 ViT-B/16 注入 LoRA 微调 Flowers102")
     p.add_argument("--epochs", type=int, default=5)
@@ -160,9 +255,13 @@ def main() -> None:
     p.add_argument("--lora-r", type=int, default=8)
     p.add_argument("--lora-alpha", type=float, default=16.0)
     p.add_argument("--lora-dropout", type=float, default=0.0)
-    p.add_argument("--targets", type=str, default="mlp.0,mlp.3",
-                   help="逗号分隔的模块名后缀。默认只包 FFN 的两个 Linear；"
-                        "加上 out_proj 会让 nn.MultiheadAttention 崩（见文件头说明）")
+    p.add_argument("--targets", type=str, default=None,
+                   help="逗号分隔的模块名后缀。不给时：不加 --swap-attn 用 FFN "
+                        "(mlp.0,mlp.3)，加了 --swap-attn 用 attention "
+                        "(self_attention.mha.wq,wv)")
+    p.add_argument("--swap-attn", action="store_true",
+                   help="把手写 MultiHeadSelfAttention 换进来，让 LoRA 能落在 "
+                        "attention 的 wq/wk/wv/wo 上（默认只能落在 FFN）")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--warmup-steps", type=int, default=30)
     p.add_argument("--max-steps", type=int, default=None)
@@ -170,7 +269,13 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=0)
     a = p.parse_args()
 
-    targets = tuple(t.strip() for t in a.targets.split(",") if t.strip())
+    if a.targets is not None:
+        targets = tuple(t.strip() for t in a.targets.split(",") if t.strip())
+    elif a.swap_attn:
+        # wq/wv 是 LoRA 论文 §4.2 里性价比最高的两个（只加 q,v 得 22.1，全加得 23.0）
+        targets = ("self_attention.mha.wq", "self_attention.mha.wv")
+    else:
+        targets = ("mlp.0", "mlp.3")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(a.seed)
     if device == "cuda":
@@ -189,6 +294,20 @@ def main() -> None:
 
     print("\n[2/5] 构建模型 + 注入 LoRA")
     model = base13.build_model(scratch=False, head_only=False, device=device)
+    if a.swap_attn:
+        probe = next(iter(val_loader))[0][:8].to(device)
+        model.eval()
+        with torch.no_grad():
+            ref = model(probe)
+        n_layer = swap_vit_attention(model, device)
+        with torch.no_grad():
+            after = model(probe)
+        diff = float((ref - after).abs().max())
+        print(f"  self_attention 换成手写实现（{n_layer} 层），"
+              f"换后前向最大差 = {diff:.3e}")
+        # 这道断言是这次改动的全部意义：换实现不能换模型
+        assert diff < 1e-5, f"换实现后输出不一致（{diff:.3e}），权重没搬对"
+        model.train()
     frozen_before = sum(p.numel() for p in model.parameters())
     wrapped = inject_lora_vit(model, a.lora_r, a.lora_alpha, targets, a.lora_dropout)
     kinds = sorted({".".join(w.split(".")[-2:]) for w in wrapped})
